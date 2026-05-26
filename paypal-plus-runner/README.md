@@ -13,10 +13,11 @@ npm run start -- --config config.example.json --windows 1 --limit 1 --dry-run
 
 ## Phone Format
 
-PayPal phones are imported from lines matching:
+PayPal phones are imported from either format:
 
 ```text
 +15722337281|http://a.62-us.com/api/get_sms?key=...
++14644009780----http://a.62-us.com/api/get_sms?key=...
 ```
 
 The runner stores `phone` as `+1XXXXXXXXXX`, fills PayPal with the local 10-digit number, waits 10 seconds after the SMS send trigger, then polls `sms_url`.

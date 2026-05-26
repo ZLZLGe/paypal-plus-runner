@@ -22,7 +22,7 @@ export function parsePaypalPhoneLine(line) {
   if (!text) return null;
   const separator = text.includes("|") ? "|" : (text.includes("----") ? "----" : "");
   if (!separator) {
-    throw new Error("expected +phone|sms_url");
+    throw new Error("expected +phone|sms_url or +phone----sms_url");
   }
   const [phonePart, ...urlParts] = text.split(separator);
   const phone = normalizePaypalPhone(phonePart);

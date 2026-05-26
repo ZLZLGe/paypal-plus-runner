@@ -5,7 +5,7 @@
 - Project skeleton and CLI.
 - SQLite schema for `outlook_emails`, `plus_accounts`, `paypal_phone_pool`, and `run_history`.
 - Outlook email importer for `email----password----client_id----refresh_token`.
-- PayPal phone importer for `/Users/leviviya/Documents/gpt/playwright/phone.txt` format: `+1XXXXXXXXXX|sms_url`.
+- PayPal phone importer for `/Users/leviviya/Documents/gpt/playwright/phone.txt` formats: `+1XXXXXXXXXX|sms_url` and `+1XXXXXXXXXX----sms_url`.
 - PayPal phone lease/release logic with SQLite `BEGIN IMMEDIATE`.
 - PayPal SMS parsing for `no` and `yes|message`.
 - Required 10-second initial delay support before polling PayPal SMS.
