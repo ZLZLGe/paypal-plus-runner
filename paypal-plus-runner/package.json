@@ -7,8 +7,12 @@
   "scripts": {
     "start": "node src/cli.js start",
     "db:init": "node src/cli.js db:init",
+    "db:stats": "node src/cli.js db:stats",
     "import-outlook": "node src/cli.js import-outlook",
     "import-paypal-phones": "node src/cli.js import-paypal-phones",
+    "phones:list": "node src/cli.js phones:list",
+    "checkout:probe": "node src/cli.js checkout:probe",
+    "roxy:probe": "node src/cli.js roxy:probe",
     "dry-run": "node src/cli.js start --dry-run",
     "test": "node test/paypal-phone-store.test.js",
     "check:syntax": "find src test -name '*.js' -print0 | xargs -0 -n1 node --check",

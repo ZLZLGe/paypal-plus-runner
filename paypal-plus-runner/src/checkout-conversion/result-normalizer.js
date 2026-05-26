@@ -29,6 +29,10 @@ export function normalizeCheckoutResult(data = {}, provider = "") {
     exitIp: String(data.exitIp || ""),
     asn: String(data.asn || data.gost_asn || ""),
     sid: String(data.sid || data.gost_sid || ""),
+    proxyUrl: String(data.proxyUrl || data.proxy_url || ""),
+    checkoutProxyMode: String(data.checkoutProxyMode || ""),
+    gostPid: Number(data.gostPid || data.gost_pid || 0),
+    gostLogPath: String(data.gostLogPath || data.gost_log_path || ""),
     raw: data,
   };
 }

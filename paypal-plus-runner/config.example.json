@@ -40,16 +40,25 @@
       "timeoutMs": 45000
     },
     "localJpProxy": {
-      "mode": "direct_proxy_url",
+      "mode": "gost_chain",
       "runProbe": true,
       "requireJpExit": true,
       "probeUrl": "https://iplark.com/ipapi/public/ip",
+      "probeTimeoutMs": 30000,
       "requestTimeoutMs": 45000,
+      "connectTimeoutMs": 15000,
+      "createStripeHostedUrl": true,
+      "stripeInitTimeoutMs": 45000,
       "firstHopProxyUrl": "http://127.0.0.1:7890",
       "secondHopProxyUrl": "socks5://username-region-JP-asn-{ASN}-sid-{SID}-t-20:password@proxy-host:443",
       "asnPools": {
         "JP": ["AS9605", "AS17676", "AS2516", "AS138384", "AS4713", "AS2518", "AS2527", "AS17511"]
-      }
+      },
+      "localHost": "127.0.0.1",
+      "localPort": 0,
+      "gostExecutable": "",
+      "gostStartupTimeoutMs": 8000,
+      "gostPortRetryAttempts": 5
     }
   },
   "roxy": {

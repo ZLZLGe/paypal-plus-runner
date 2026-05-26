@@ -8,6 +8,7 @@ import { insertPlusAccount } from "./db/plus-store.js";
 import { prepareRunContext, runWorkflow } from "./workflow.js";
 import { connectOverCdp } from "./browser/connect-cdp.js";
 import { WorkflowNotImplementedError } from "./utils/errors.js";
+import { writeFailureArtifacts } from "./utils/artifacts.js";
 
 export class Worker {
   constructor({ id, db = null, config, logger, dryRun = false, windowInfo = null }) {
@@ -77,6 +78,7 @@ export class Worker {
 
     const runId = makeRunId(this.id);
     let phoneLease = null;
+    let context = null;
     createRun(this.db, { runId, email: account.email, outlookEmailId: account.id, workerId: this.id });
     updateRun(this.db, runId, {
       status: "running",
@@ -102,7 +104,7 @@ export class Worker {
         paypalLocalPhone: phoneLease.paypal_local_phone,
       });
 
-      const context = await prepareRunContext({
+      context = await prepareRunContext({
         account,
         phoneLease,
         config: this.config,
@@ -132,6 +134,24 @@ export class Worker {
       return { status: "done", runId, result };
     } catch (error) {
       const retryable = error instanceof WorkflowNotImplementedError ? true : true;
+      try {
+        const artifactContext = context || {
+          runId,
+          workerId: this.id,
+          account,
+          phoneLease,
+          windowInfo: this.windowInfo,
+          page: this.windowInfo?.page || null,
+          config: this.config,
+          currentStep: error.step || "unknown",
+        };
+        const artifact = await writeFailureArtifacts(artifactContext, error, { logger: this.logger });
+        if (artifact?.dir) {
+          updateRun(this.db, runId, { artifact_dir: artifact.dir });
+        }
+      } catch (artifactError) {
+        this.logger.warn("failure artifact capture failed", { runId, error: artifactError.message });
+      }
       if (phoneLease) {
         releasePaypalPhone(this.db, phoneLease.id, { runId, success: false, error: error.message });
       }

@@ -75,6 +75,7 @@ export async function runWorkflow(context, { dryRun = false, logger } = {}) {
 
   const results = {};
   for (const [name, fn] of steps) {
+    context.currentStep = name;
     logger?.info?.("workflow step start", { step: name, email: context.account.email });
     try {
       const result = await fn(context, { logger, accessToken });

@@ -54,6 +54,7 @@ export function initSchema(db) {
       current_step TEXT NOT NULL DEFAULT '',
       roxy_dir_id TEXT NOT NULL DEFAULT '',
       roxy_exit_ip TEXT NOT NULL DEFAULT '',
+      artifact_dir TEXT NOT NULL DEFAULT '',
       error TEXT NOT NULL DEFAULT '',
       started_at TEXT NOT NULL DEFAULT '',
       finished_at TEXT NOT NULL DEFAULT '',
@@ -65,4 +66,9 @@ export function initSchema(db) {
     CREATE INDEX IF NOT EXISTS idx_phone_status ON paypal_phone_pool(status, used_count, updated_at);
     CREATE INDEX IF NOT EXISTS idx_run_history_status ON run_history(status, updated_at);
   `);
+
+  const columns = db.prepare("PRAGMA table_info(run_history)").all().map((row) => row.name);
+  if (!columns.includes("artifact_dir")) {
+    db.exec("ALTER TABLE run_history ADD COLUMN artifact_dir TEXT NOT NULL DEFAULT '';");
+  }
 }

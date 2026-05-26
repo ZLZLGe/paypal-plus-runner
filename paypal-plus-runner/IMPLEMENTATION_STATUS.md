@@ -17,7 +17,10 @@
   - generated Visa-like Luhn card
 - Checkout conversion provider interfaces:
   - cloud provider compatible with plugin service
-  - local JP provider scaffold
+  - local JP provider with `curl --proxy`
+  - `direct_proxy_url` and temporary `gost_chain` modes
+  - JP exit probe and optional strict JP validation
+  - Stripe hosted checkout init fallback
 - Roxy multi-window runtime:
   - create/open/recover Roxy windows
   - connect through Playwright CDP
@@ -38,11 +41,16 @@
 - Session JSON extraction from ChatGPT `/api/auth/session` plus storage fallback.
 - Optional SUB2API session JSON import.
 - Tests for PayPal phone double format import and lease uniqueness.
+- Failure artifacts under `output/<runId>/`, including `failure.json`, screenshot, and HTML snapshot.
+- CLI diagnostics:
+  - `db:stats`
+  - `phones:list`
+  - `checkout:probe`
+  - `roxy:probe`
 
 ## Not Yet Implemented
 
-- GOST transport adapter for local JP conversion.
 - Real-site end-to-end validation on Roxy/ChatGPT/PayPal.
 - Additional recovery logic for page variants not covered by the original plugin scripts.
 
-Non-dry-run can open Roxy/CDP and run the implemented workflow. The first seven PayPal Plus Hosted Checkout steps are now wired through the original plugin content scripts; they still need live validation because selector behavior depends on current ChatGPT/PayPal pages.
+Non-dry-run can open Roxy/CDP and run the implemented workflow. The first seven PayPal Plus Hosted Checkout steps are wired through the original plugin content scripts, and local JP checkout conversion now sends real proxied requests. The flow still needs live validation in the target Roxy/ChatGPT/PayPal environment because selector behavior and upstream checkout responses depend on current pages.
