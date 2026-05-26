@@ -1,17 +1,24 @@
 import { makeRunId } from "./utils/ids.js";
+import { openDatabase } from "./db/connection.js";
+import { initSchema } from "./db/schema.js";
 import { leaseNextOutlookEmail, markOutlookFailure, markOutlookPlusDone, markOutlookRunning } from "./db/outlook-store.js";
 import { leasePaypalPhone, releasePaypalPhone } from "./db/paypal-phone-store.js";
 import { createRun, finishRun, updateRun } from "./db/run-history-store.js";
 import { insertPlusAccount } from "./db/plus-store.js";
-import { prepareRunContext, runWorkflow, WorkflowNotImplementedError } from "./workflow.js";
+import { prepareRunContext, runWorkflow } from "./workflow.js";
+import { connectOverCdp } from "./browser/connect-cdp.js";
+import { WorkflowNotImplementedError } from "./utils/errors.js";
 
 export class Worker {
-  constructor({ id, db, config, logger, dryRun = false }) {
+  constructor({ id, db = null, config, logger, dryRun = false, windowInfo = null }) {
     this.id = id;
-    this.db = db;
+    this.db = db || openDatabase(config.database.path);
+    initSchema(this.db);
+    this.ownsDb = !db;
     this.config = config;
     this.logger = logger;
     this.dryRun = dryRun;
+    this.windowInfo = windowInfo;
     this.stopped = false;
   }
 
@@ -19,7 +26,50 @@ export class Worker {
     this.stopped = true;
   }
 
+  close() {
+    if (this.ownsDb) this.db.close();
+  }
+
+  async maybeRotateWindowProxy() {
+    const roxy = this.config.roxy || {};
+    const info = this.windowInfo;
+    if (!info?.client || !info?.dirId) return null;
+    const every = Math.max(0, Number.parseInt(String(roxy.rotateProxyEveryAccounts || 0), 10));
+    const rotatePerAccount = roxy.rotateProxyPerAccount === true;
+    const shouldRotate = rotatePerAccount || (every > 0 && info.accountRuns > 0 && info.accountRuns % every === 0);
+    if (!shouldRotate) return null;
+    this.logger.info("rotating roxy proxy for window", {
+      dirId: info.dirId,
+      accountRuns: info.accountRuns,
+      rotatePerAccount,
+      every,
+    });
+    const result = await info.client.modifyWindowProxy(info.dirId, {
+      reopen: roxy.reopenWindowOnProxyRotate !== false,
+    });
+    info.sid = result.sid || info.sid;
+    info.asn = result.asn || info.asn;
+    info.region = result.region || info.region;
+    info.proxyUserName = result.proxyUserName || info.proxyUserName;
+    if (result.rawOpen?.ws) {
+      info.ws = result.rawOpen.ws;
+      try {
+        await info.browser?.close?.();
+      } catch {
+        // The old CDP connection is expected to disconnect when Roxy reopens.
+      }
+      const connected = await connectOverCdp(info.ws, {
+        timeoutMs: Number(roxy.cdpConnectTimeoutMs || 45000),
+      });
+      info.browser = connected.browser;
+      info.context = connected.context;
+      info.page = connected.page;
+    }
+    return result;
+  }
+
   async runOnce() {
+    await this.maybeRotateWindowProxy();
     const account = leaseNextOutlookEmail(this.db, {
       maxAttempts: Number(this.config.runner?.maxAttemptsPerEmail || 5),
     });
@@ -28,7 +78,12 @@ export class Worker {
     const runId = makeRunId(this.id);
     let phoneLease = null;
     createRun(this.db, { runId, email: account.email, outlookEmailId: account.id, workerId: this.id });
-    updateRun(this.db, runId, { status: "running", current_step: "lease-paypal-phone" });
+    updateRun(this.db, runId, {
+      status: "running",
+      current_step: "lease-paypal-phone",
+      roxy_dir_id: this.windowInfo?.dirId || "",
+      roxy_exit_ip: this.windowInfo?.exitIp || "",
+    });
 
     try {
       markOutlookRunning(this.db, account.id);
@@ -47,7 +102,14 @@ export class Worker {
         paypalLocalPhone: phoneLease.paypal_local_phone,
       });
 
-      const context = await prepareRunContext({ account, phoneLease, config: this.config });
+      const context = await prepareRunContext({
+        account,
+        phoneLease,
+        config: this.config,
+        windowInfo: this.windowInfo,
+        runId,
+        workerId: this.id,
+      });
       updateRun(this.db, runId, { current_step: "workflow" });
       const result = await runWorkflow(context, { dryRun: this.dryRun, logger: this.logger });
 
@@ -66,6 +128,7 @@ export class Worker {
       markOutlookPlusDone(this.db, account.id);
       releasePaypalPhone(this.db, phoneLease.id, { runId, success: true });
       finishRun(this.db, runId, { status: "done" });
+      if (this.windowInfo) this.windowInfo.accountRuns += 1;
       return { status: "done", runId, result };
     } catch (error) {
       const retryable = error instanceof WorkflowNotImplementedError ? true : true;
@@ -84,13 +147,17 @@ export class Worker {
 
   async runLoop({ limit = 0 } = {}) {
     const results = [];
-    while (!this.stopped) {
-      if (limit > 0 && results.length >= limit) break;
-      const result = await this.runOnce();
-      if (result.status === "empty") break;
-      results.push(result);
-      if (this.dryRun) break;
+    try {
+      while (!this.stopped) {
+        if (limit > 0 && results.length >= limit) break;
+        const result = await this.runOnce();
+        if (result.status === "empty") break;
+        results.push(result);
+        if (this.dryRun) break;
+      }
+      return results;
+    } finally {
+      this.close();
     }
-    return results;
   }
 }

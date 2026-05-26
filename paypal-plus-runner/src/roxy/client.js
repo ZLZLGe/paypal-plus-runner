@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { chooseAsnForTemplate, renderProxyTemplate } from "./proxy-asn.js";
 import { randomSid } from "../utils/ids.js";
+import { sleep } from "../utils/sleep.js";
 
 function asBool(value, fallback = false) {
   if (typeof value === "boolean") return value;
@@ -48,6 +49,13 @@ export class RoxyClient {
     return payload.data || {};
   }
 
+  effectiveWorkspaceId(workspaceId = undefined) {
+    const value = workspaceId === undefined || workspaceId === null ? this.workspaceId : workspaceId;
+    const parsed = Number(value || 0);
+    if (!Number.isFinite(parsed) || parsed <= 0) throw new Error(`invalid roxy workspace_id: ${value}`);
+    return parsed;
+  }
+
   chooseProxyAsn() {
     return chooseAsnForTemplate(this.proxy.username_template || "", this.proxy.asn_pools, "JP");
   }
@@ -72,13 +80,42 @@ export class RoxyClient {
     };
   }
 
+  windowDirId(row = {}) {
+    return String(row.dirId || row.id || row.dir_id || "").trim();
+  }
+
+  windowName(row = {}) {
+    return String(row.windowName || row.name || row.browserName || "").trim();
+  }
+
+  async listWindows({ pageIndex = 1, pageSize = 500, workspaceId = undefined } = {}) {
+    const data = await this.request("/browser/list_v3", {
+      params: {
+        workspaceId: this.effectiveWorkspaceId(workspaceId),
+        page_index: pageIndex,
+        page_size: pageSize,
+      },
+    });
+    if (Array.isArray(data)) return data;
+    if (Array.isArray(data.rows)) return data.rows;
+    if (Array.isArray(data.list)) return data.list;
+    return [];
+  }
+
+  async findWindowByName(name) {
+    const target = String(name || "").trim();
+    if (!target) return null;
+    const rows = await this.listWindows();
+    return rows.find((row) => this.windowName(row) === target && this.windowDirId(row)) || null;
+  }
+
   async createWindow(name) {
     const sid = randomSid();
     const { asn, region } = this.chooseProxyAsn();
     const data = await this.request("/browser/create", {
       method: "POST",
       body: {
-        workspaceId: this.workspaceId,
+        workspaceId: this.effectiveWorkspaceId(),
         windowName: name,
         proxyInfo: this.buildProxyInfo(sid, asn),
       },
@@ -89,36 +126,88 @@ export class RoxyClient {
   async openWindow(dirId) {
     return this.request("/browser/open", {
       method: "POST",
-      body: { workspaceId: this.workspaceId, dirId, headless: this.headless, args: this.openArgs },
+      body: {
+        workspaceId: this.effectiveWorkspaceId(),
+        dirId,
+        headless: this.headless,
+        ...(this.openArgs.length ? { args: this.openArgs } : {}),
+      },
     });
   }
 
+  async reopenWindow(dirId) {
+    try {
+      await this.closeWindow(dirId);
+    } catch {
+      // Roxy returns an error when a profile is already closed; opening again is still valid.
+    }
+    return this.openWindow(dirId);
+  }
+
   async closeWindow(dirId) {
-    return this.request("/browser/close", { method: "POST", body: { workspaceId: this.workspaceId, dirId } });
+    return this.request("/browser/close", {
+      method: "POST",
+      body: { workspaceId: this.effectiveWorkspaceId(), dirId },
+    });
   }
 
   async deleteWindow(dirId) {
-    return this.request("/browser/delete", { method: "POST", body: { workspaceId: this.workspaceId, dirIds: [dirId] } });
+    return this.request("/browser/delete", {
+      method: "POST",
+      body: { workspaceId: this.effectiveWorkspaceId(), dirIds: [dirId] },
+    });
   }
 
-  async modifyWindowProxy(dirId) {
+  async modifyWindowProxy(dirId, { reopen = false } = {}) {
     const sid = randomSid();
     const { asn, region } = this.chooseProxyAsn();
     const data = await this.request("/browser/mdf", {
       method: "POST",
-      body: { workspaceId: this.workspaceId, dirId, proxyInfo: this.buildProxyInfo(sid, asn) },
+      body: {
+        workspaceId: this.effectiveWorkspaceId(),
+        dirId,
+        proxyInfo: this.buildProxyInfo(sid, asn),
+      },
     });
-    return { ...data, sid, asn, region, proxyUserName: this.buildProxyUsername(sid, asn) };
+    let opened = null;
+    if (reopen) opened = await this.reopenWindow(dirId);
+    return { ...data, sid, asn, region, proxyUserName: this.buildProxyUsername(sid, asn), rawOpen: opened };
   }
 
   async createAndOpen(name) {
     const created = await this.createWindow(name);
-    const dirId = String(created.dirId || created.id || "");
+    const dirId = this.windowDirId(created);
     if (!dirId) throw new Error(`roxy create missing dirId: ${JSON.stringify(created)}`);
     const opened = await this.openWindow(dirId);
     const ws = String(opened.ws || opened.webSocketDebuggerUrl || "");
     if (!ws) throw new Error(`roxy open missing ws: ${JSON.stringify(opened)}`);
     return { ...created, dirId, ws, rawOpen: opened };
+  }
+
+  async recoverAndOpen(name) {
+    const found = await this.findWindowByName(name);
+    if (!found) return null;
+    const dirId = this.windowDirId(found);
+    const opened = await this.openWindow(dirId);
+    const ws = String(opened.ws || opened.webSocketDebuggerUrl || found.ws || "");
+    if (!ws) throw new Error(`roxy recover open missing ws: ${JSON.stringify(opened)}`);
+    return { ...found, dirId, ws, rawOpen: opened, recovered: true };
+  }
+
+  async createOrRecoverAndOpen(name, { attempts = 3, retryDelayMs = 8000 } = {}) {
+    let lastError = null;
+    const total = Math.max(1, Number.parseInt(String(attempts || 1), 10));
+    for (let attempt = 1; attempt <= total; attempt += 1) {
+      try {
+        return await this.createAndOpen(name);
+      } catch (error) {
+        lastError = error;
+        const recovered = await this.recoverAndOpen(name).catch(() => null);
+        if (recovered) return recovered;
+        if (attempt < total) await sleep(retryDelayMs);
+      }
+    }
+    throw lastError || new Error(`roxy create failed: ${name}`);
   }
 
   static resolveLocalProxyPort(dirId) {
@@ -147,5 +236,19 @@ export class RoxyClient {
   static buildLocalWindowProxyUrl(dirId) {
     const port = RoxyClient.resolveLocalProxyPort(dirId);
     return `socks5://${dirId}:${dirId}@127.0.0.1:${port}`;
+  }
+
+  static async buildLocalWindowProxyUrlWithRetry(dirId, { attempts = 10, delayMs = 750 } = {}) {
+    let lastError = null;
+    const total = Math.max(1, Number.parseInt(String(attempts || 1), 10));
+    for (let attempt = 1; attempt <= total; attempt += 1) {
+      try {
+        return RoxyClient.buildLocalWindowProxyUrl(dirId);
+      } catch (error) {
+        lastError = error;
+        if (attempt < total) await sleep(delayMs);
+      }
+    }
+    throw lastError || new Error(`cannot resolve roxy local proxy for dir_id=${dirId}`);
   }
 }

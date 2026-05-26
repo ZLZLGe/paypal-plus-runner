@@ -6,3 +6,11 @@ export class RunnerError extends Error {
     this.retryable = retryable;
   }
 }
+
+export class WorkflowNotImplementedError extends Error {
+  constructor(step) {
+    super(`browser automation step is not implemented yet: ${step}`);
+    this.name = "WorkflowNotImplementedError";
+    this.step = step;
+  }
+}
