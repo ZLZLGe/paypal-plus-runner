@@ -42,6 +42,7 @@ export const DEFAULT_CONFIG = {
       requireJpExit: true,
       probeUrl: "https://iplark.com/ipapi/public/ip",
       probeTimeoutMs: 30000,
+      geoLookupTimeoutMs: 15000,
       requestTimeoutMs: 45000,
       connectTimeoutMs: 15000,
       createStripeHostedUrl: true,

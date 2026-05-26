@@ -2,15 +2,7 @@ import { randomSid } from "../utils/ids.js";
 import { chooseAsnForTemplate, renderProxyTemplate } from "../roxy/proxy-asn.js";
 import { curlRequest } from "./curl-transport.js";
 import { startGostChain, stopGostChain } from "./gost-chain.js";
-
-function detectCountryCode(text) {
-  try {
-    const data = JSON.parse(String(text || ""));
-    return String(data.countryCode || data.country_code || data.country || data.location?.country_code || "").toUpperCase();
-  } catch {
-    return String(text || "").match(/["'\s:=,](JP)["'\s,}]/i) ? "JP" : "";
-  }
-}
+import { detectCountryCode, extractIp, lookupCountryCodeForIp } from "./geo-probe.js";
 
 function normalizeProxyUrl(value) {
   const proxy = String(value || "").trim();
@@ -52,6 +44,14 @@ export async function probeLocalJpCheckoutProxy(config) {
       connectTimeoutMs: Number(local.connectTimeoutMs || 15000),
       headers: { Accept: "application/json,text/plain,*/*" },
     });
+    const exitIp = extractIp(response.text) || response.remoteIp || "";
+    let countryCode = detectCountryCode(response.text);
+    if (!countryCode && exitIp) {
+      countryCode = await lookupCountryCodeForIp(exitIp, {
+        timeoutMs: Number(local.geoLookupTimeoutMs || 15000),
+        connectTimeoutMs: Number(local.connectTimeoutMs || 8000),
+      });
+    }
     return {
       ok: response.status >= 200 && response.status < 400,
       mode,
@@ -60,8 +60,8 @@ export async function probeLocalJpCheckoutProxy(config) {
       region,
       proxyUrl,
       status: response.status,
-      countryCode: detectCountryCode(response.text),
-      exitIp: response.remoteIp,
+      countryCode,
+      exitIp,
       body: response.text.slice(0, 1200),
       gostPid: chain?.pid || 0,
       gostLogPath: chain?.logPath || "",

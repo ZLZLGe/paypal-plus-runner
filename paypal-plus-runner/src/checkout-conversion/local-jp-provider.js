@@ -5,6 +5,7 @@ import { buildCheckoutHeaders, buildCheckoutPayload } from "./checkout-api.js";
 import { normalizeCheckoutResult } from "./result-normalizer.js";
 import { curlRequest } from "./curl-transport.js";
 import { startGostChain, stopGostChain } from "./gost-chain.js";
+import { detectCountryCode, extractIp, lookupCountryCodeForIp } from "./geo-probe.js";
 
 const CHECKOUT_URL = "https://chatgpt.com/backend-api/payments/checkout";
 const PAY_OPENAI_URL_PATTERN = /^https:\/\/(?:pay\.openai\.com|checkout\.stripe\.com)\/c\/pay\//i;
@@ -63,29 +64,6 @@ function buildStripePayload(publishableKey) {
   return fields.toString();
 }
 
-function detectCountryCode(probeText) {
-  const text = String(probeText || "").trim();
-  if (!text) return "";
-  try {
-    const data = JSON.parse(text);
-    const candidates = [
-      data.countryCode,
-      data.country_code,
-      data.country_code2,
-      data.country,
-      data.iso_code,
-      data.location?.country_code,
-      data.location?.countryCode,
-    ];
-    const found = candidates.find((item) => /^[A-Za-z]{2}$/.test(String(item || "").trim()));
-    if (found) return String(found).trim().toUpperCase();
-  } catch {
-    // Some probe services return plain text; fall back to a conservative regex.
-  }
-  const match = text.match(/["'\s:=,](JP)["'\s,}]/i);
-  return match ? "JP" : "";
-}
-
 function normalizeProxyUrl(value) {
   const proxy = String(value || "").trim();
   if (!proxy) return "";
@@ -105,13 +83,20 @@ async function probeProxy({ proxyUrl, local }) {
     connectTimeoutMs: Number(local.connectTimeoutMs || 15000),
     headers: { Accept: "application/json,text/plain,*/*" },
   });
-  const countryCode = detectCountryCode(response.text);
+  let countryCode = detectCountryCode(response.text);
+  const exitIp = extractIp(response.text) || response.remoteIp || "";
+  if (!countryCode && exitIp) {
+    countryCode = await lookupCountryCodeForIp(exitIp, {
+      timeoutMs: Number(local.geoLookupTimeoutMs || 15000),
+      connectTimeoutMs: Number(local.connectTimeoutMs || 8000),
+    });
+  }
   return {
     ok: response.status >= 200 && response.status < 400,
     status: response.status,
     body: response.text.slice(0, 1200),
     countryCode,
-    exitIp: response.remoteIp || "",
+    exitIp,
   };
 }
 
