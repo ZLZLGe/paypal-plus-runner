@@ -1,0 +1,140 @@
+{
+  "database": {
+    "path": "data/paypal_plus_runner.db"
+  },
+  "runner": {
+    "gptPassword": "myPASSword!",
+    "maxAttemptsPerEmail": 5,
+    "cleanupBrowserDataBeforeEachAccount": true,
+    "screenshotOnFailure": true,
+    "htmlSnapshotOnFailure": true
+  },
+  "flow": {
+    "plusModeEnabled": true,
+    "plusPaymentMethod": "paypal",
+    "accountAccessStrategyUi": "session_json",
+    "sessionJsonTarget": "sub2api",
+    "plusAccountAccessStrategy": "sub2api_codex_session"
+  },
+  "checkoutConversion": {
+    "enabled": true,
+    "provider": "local_jp_proxy",
+    "paymentMethod": "paypal",
+    "country": "US",
+    "currency": "USD",
+    "processorEntity": "openai_llc",
+    "useFreeTrialPromo": true,
+    "alreadyPaidIsSuccess": true,
+    "maxAttempts": 3,
+    "cloud": {
+      "apiUrl": "https://your-checkout-converter.example.com/api/checkout",
+      "apiKey": "",
+      "timeoutMs": 45000
+    },
+    "localJpProxy": {
+      "mode": "direct_proxy_url",
+      "runProbe": true,
+      "requireJpExit": true,
+      "probeUrl": "https://iplark.com/ipapi/public/ip",
+      "requestTimeoutMs": 45000,
+      "firstHopProxyUrl": "http://127.0.0.1:7890",
+      "secondHopProxyUrl": "socks5://username-region-JP-asn-{ASN}-sid-{SID}-t-20:password@proxy-host:443",
+      "asnPools": {
+        "JP": ["AS9605", "AS17676", "AS2516", "AS138384", "AS4713", "AS2518", "AS2527", "AS17511"]
+      }
+    }
+  },
+  "roxy": {
+    "api_base": "http://127.0.0.1:50000",
+    "token": "",
+    "workspace_id": 1,
+    "windowCount": 5,
+    "api_rate_limit_per_min": 90,
+    "headless": true,
+    "open_args": [],
+    "restore_focus_after_open": true,
+    "restore_focus_app": "auto",
+    "rotateProxyPerAccount": false,
+    "rotateProxyEveryAccounts": 3,
+    "rotateProxyOnFailure": true,
+    "rotateProxyOnRiskErrors": true,
+    "reuseWindowProfile": true,
+    "reopenWindowOnProxyRotate": true,
+    "closeWindowsOnExit": true,
+    "deleteWindowsOnExit": false,
+    "proxy": {
+      "host": "us.cliproxy.io",
+      "port": "3010",
+      "password": "",
+      "check_channel": "IPRust.io",
+      "username_template": "username-region-US-asn-{ASN}-sid-{SID}-t-20",
+      "asn_pools": {
+        "US": ["AS7922", "AS20057", "AS20115", "AS22773", "AS7018", "AS21928", "AS6167", "AS5650"],
+        "JP": ["AS9605", "AS17676", "AS2516", "AS138384", "AS4713", "AS2518", "AS2527", "AS17511"]
+      },
+      "proxy_method": "custom",
+      "proxy_category": "SOCKS5",
+      "protocol": "SOCKS5",
+      "username": ""
+    }
+  },
+  "paypalPhone": {
+    "leaseMinutes": 30,
+    "maxUse": 5,
+    "initialSmsDelayMs": 10000,
+    "pollIntervalMs": 500,
+    "pollTimeoutMs": 180000,
+    "fillLocalUsNumber": true
+  },
+  "checkoutProfile": {
+    "mode": "plugin-compatible",
+    "addressProvider": "meiguodizhi",
+    "addressEndpoint": "https://www.meiguodizhi.com/api/v1/dz",
+    "hostedAddressPath": "/",
+    "hostedAddressMethod": "address",
+    "firstName": "James",
+    "lastName": "Smith",
+    "guestEmailDomain": "gmail.com",
+    "cardMode": "generated-visa-luhn",
+    "storeCardInDb": false,
+    "fallbackAddress": {
+      "street": "123 Main St",
+      "city": "New York",
+      "state": "New York",
+      "zip": "10001",
+      "countryCode": "US"
+    },
+    "billingAddress": {
+      "preferSameAsHostedAddress": true,
+      "paypalUsRandomUserFallback": true,
+      "skipAutocompleteWhenDirectAddressAvailable": true
+    }
+  },
+  "verification": {
+    "openaiEmailProvider": "ms-oauth2api-next",
+    "msOauth2ApiBaseUrl": "https://your-ms-oauth2api-next.example.com",
+    "mailboxes": ["INBOX", "Junk"],
+    "mailPollIntervalMs": 3000,
+    "mailMaxAttempts": 60,
+    "mailFetchMode": "mail_new",
+    "mailLookbackMs": 600000,
+    "paypalSmsProvider": "phone-pool-sms-url",
+    "paypalSmsInitialDelayMs": 10000,
+    "paypalSmsPollIntervalMs": 3000,
+    "paypalSmsMaxAttempts": 60,
+    "paypalSmsRequestTimeoutMs": 15000
+  },
+  "sub2api": {
+    "baseUrl": "",
+    "email": "",
+    "password": "",
+    "groupName": "codex"
+  },
+  "cpa": {
+    "baseUrl": "",
+    "authorizationBearer": ""
+  },
+  "output": {
+    "dir": "output"
+  }
+}

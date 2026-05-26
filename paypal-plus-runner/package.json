@@ -1,0 +1,18 @@
+{
+  "name": "paypal-plus-roxy-runner",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "description": "Terminal Roxy runner for PayPal Plus flow.",
+  "scripts": {
+    "start": "node src/cli.js start",
+    "db:init": "node src/cli.js db:init",
+    "import-outlook": "node src/cli.js import-outlook",
+    "import-paypal-phones": "node src/cli.js import-paypal-phones",
+    "dry-run": "node src/cli.js start --dry-run",
+    "check": "node --check src/cli.js && node src/cli.js db:init --db data/check.db && rm -f data/check.db data/check.db-shm data/check.db-wal"
+  },
+  "engines": {
+    "node": ">=24.0.0"
+  }
+}

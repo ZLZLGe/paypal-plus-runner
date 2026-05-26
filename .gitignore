@@ -1,0 +1,8 @@
+.DS_Store
+node_modules/
+*.log
+paypal-plus-runner/data/*.db
+paypal-plus-runner/data/*.db-shm
+paypal-plus-runner/data/*.db-wal
+paypal-plus-runner/output/*
+!paypal-plus-runner/output/.gitkeep
