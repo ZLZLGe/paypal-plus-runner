@@ -1,13 +1,14 @@
 import { createCloudCheckout } from "./cloud-provider.js";
 import { createLocalJpCheckout } from "./local-jp-provider.js";
 
-export async function createCheckout({ accessToken, config }) {
+export async function createCheckout({ accessToken, config, logger = null }) {
   if (!accessToken) throw new Error("accessToken is required");
   const provider = String(config.checkoutConversion?.provider || "local_jp_proxy");
-  if (provider === "cloud") return createCloudCheckout({ accessToken, config });
-  if (provider === "local_jp_proxy") return createLocalJpCheckout({ accessToken, config });
+  if (provider === "cloud") return createCloudCheckout({ accessToken, config, logger });
+  if (provider === "local_jp_proxy") return createLocalJpCheckout({ accessToken, config, logger });
   if (provider === "direct") return createLocalJpCheckout({
     accessToken,
+    logger,
     config: {
       ...config,
       checkoutConversion: {

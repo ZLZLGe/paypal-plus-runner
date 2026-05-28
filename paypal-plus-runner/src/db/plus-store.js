@@ -1,5 +1,11 @@
 import { utcNow } from "./connection.js";
 
+function getImportTarget(result = {}, config = {}) {
+  const configured = config.flow?.sessionJsonTarget || "session_json";
+  if (!result.cpaJsonPath) return configured;
+  return configured === "session_json" ? "local_cpa_json" : `${configured}+local_cpa_json`;
+}
+
 export function insertPlusAccount(db, account, result = {}, config = {}) {
   db.prepare(`
     INSERT INTO plus_accounts(
@@ -23,7 +29,7 @@ export function insertPlusAccount(db, account, result = {}, config = {}) {
     account.refresh_token || "",
     config.runner?.gptPassword || "myPASSword!",
     result.sessionJson || "",
-    config.flow?.sessionJsonTarget || "session_json",
+    getImportTarget(result, config),
     result.roxyDirId || "",
     result.roxyExitIp || "",
     utcNow(),

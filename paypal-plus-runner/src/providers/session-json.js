@@ -1,4 +1,4 @@
-function parseJwtPayload(token) {
+export function parseJwtPayload(token) {
   const parts = String(token || "").split(".");
   if (parts.length < 2) return {};
   try {
@@ -8,6 +8,62 @@ function parseJwtPayload(token) {
   } catch {
     return {};
   }
+}
+
+function firstNonEmpty(...values) {
+  for (const value of values) {
+    const text = String(value || "").trim();
+    if (text) return text;
+  }
+  return "";
+}
+
+function getOpenAiAuthSection(payload) {
+  const section = payload?.["https://api.openai.com/auth"];
+  return section && typeof section === "object" ? section : {};
+}
+
+export function extractSessionPlanType(sessionJson = "") {
+  let record = {};
+  try {
+    record = typeof sessionJson === "string" ? JSON.parse(sessionJson || "{}") : (sessionJson || {});
+  } catch {
+    record = {};
+  }
+  const rawSession = record.raw_session && typeof record.raw_session === "object" ? record.raw_session : {};
+  const accessPayload = parseJwtPayload(record.access_token || record.accessToken || "");
+  const idPayload = parseJwtPayload(record.id_token || record.idToken || "");
+  const accessAuth = getOpenAiAuthSection(accessPayload);
+  const idAuth = getOpenAiAuthSection(idPayload);
+  return firstNonEmpty(
+    record.account?.planType,
+    record.account?.plan_type,
+    record.planType,
+    record.plan_type,
+    rawSession.account?.planType,
+    rawSession.account?.plan_type,
+    rawSession.planType,
+    rawSession.plan_type,
+    accessAuth.chatgpt_plan_type,
+    idAuth.chatgpt_plan_type,
+  );
+}
+
+export function isPlusSessionPlanType(planType = "") {
+  const normalized = String(planType || "").trim().toLowerCase();
+  return /(^|[^a-z0-9])(plus|pro|team|business|enterprise)([^a-z0-9]|$)/i.test(normalized)
+    || normalized === "chatgptplusplan";
+}
+
+export function assertPlusSessionJson(sessionJson = "") {
+  const planType = extractSessionPlanType(sessionJson);
+  if (!isPlusSessionPlanType(planType)) {
+    const error = new Error(`ChatGPT Plus plan not confirmed in session JSON; plan_type=${planType || "empty"}`);
+    error.code = "PLUS_SESSION_NOT_CONFIRMED";
+    error.retryable = true;
+    throw error;
+  }
+  return { ok: true, planType };
 }
 
 export function buildSessionJson(record = {}) {

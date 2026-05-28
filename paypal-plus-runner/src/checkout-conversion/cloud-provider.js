@@ -5,7 +5,12 @@ export async function createCloudCheckout({ accessToken, config }) {
   const cloud = conversion.cloud || {};
   const apiUrl = String(cloud.apiUrl || "").trim();
   if (!apiUrl) throw new Error("checkoutConversion.cloud.apiUrl is empty");
-  const headers = { Accept: "application/json", "Content-Type": "application/json" };
+  const headers = {
+    Accept: "application/json",
+    "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+    "Content-Type": "application/json",
+  };
+  const useFreeTrialPromo = conversion.useFreeTrialPromo !== false;
   if (cloud.apiKey) headers["X-API-Key"] = String(cloud.apiKey);
   const response = await fetch(apiUrl, {
     method: "POST",
@@ -16,7 +21,8 @@ export async function createCloudCheckout({ accessToken, config }) {
       country: conversion.country || "US",
       currency: conversion.currency || "USD",
       processorEntity: conversion.processorEntity || "openai_llc",
-      useFreeTrialPromo: conversion.useFreeTrialPromo !== false,
+      useFreeTrialPromo,
+      promoCampaignId: useFreeTrialPromo ? "plus-1-month-free" : "",
     }),
     signal: AbortSignal.timeout(Number(cloud.timeoutMs || 45000)),
   });

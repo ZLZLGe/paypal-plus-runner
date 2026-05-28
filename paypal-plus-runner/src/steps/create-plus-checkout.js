@@ -1,5 +1,11 @@
 import { createCheckout } from "../checkout-conversion/index.js";
-import { safeGoto } from "../browser/page-utils.js";
+import { resolveCheckoutOpenTarget } from "../checkout-conversion/hosted-url.js";
+import { safeGotoWithRetry } from "../browser/page-utils.js";
+
+function positiveInt(value, fallback) {
+  const parsed = Number.parseInt(String(value ?? ""), 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
 
 export async function createPlusCheckoutStep(context, { accessToken = "", logger } = {}) {
   const page = context.page;
@@ -10,19 +16,40 @@ export async function createPlusCheckoutStep(context, { accessToken = "", logger
     accessToken = session.accessToken;
     context.sessionJson = session.sessionJson;
   }
-  const checkout = await createCheckout({ accessToken, config: context.config });
+  context.checkoutAccessToken = accessToken;
+  const checkout = await createCheckout({ accessToken, config: context.config, logger });
   context.checkout = checkout;
   if (checkout.alreadyPaid) {
+    context.plusAlreadyPaid = true;
     logger?.info?.("checkout conversion says account is already paid", {
       reason: checkout.alreadyPaidReason,
     });
     return { status: "skipped", reason: "already_paid", checkout };
   }
-  const targetUrl = checkout.preferredCheckoutUrl || checkout.hostedCheckoutUrl || checkout.chatgptCheckoutUrl || checkout.checkoutUrl;
-  if (!targetUrl) throw new Error("checkout conversion did not return a URL");
-  const stage = await safeGoto(page, targetUrl, {
+  const target = resolveCheckoutOpenTarget(checkout, context.config);
+  logger?.info?.("opening checkout URL", {
+    provider: checkout.provider,
+    checkoutSessionId: checkout.checkoutSessionId,
+    targetType: target.type,
+    targetPreference: target.preference,
+    processorEntity: checkout.processorEntity,
+    country: checkout.country,
+    currency: checkout.currency,
+    exitRegion: checkout.exitRegion,
+    exitIp: checkout.exitIp,
+  });
+  const stage = await safeGotoWithRetry(page, target.url, {
     waitUntil: "domcontentloaded",
     timeoutMs: Number(context.config.runner?.pageLoadTimeoutMs || 120000),
+    attempts: positiveInt(context.config.runner?.checkoutOpenNavigationAttempts, 3),
+    retryDelayMs: positiveInt(context.config.runner?.checkoutOpenNavigationRetryDelayMs, 1500),
+    onRetry: ({ attempt, maxAttempts, error }) => logger?.warn?.("checkout URL navigation failed; retrying", {
+      attempt,
+      maxAttempts,
+      error: error.message,
+      targetType: target.type,
+      targetPreference: target.preference,
+    }),
   });
   return { status: "done", reason: "checkout_opened", checkout, stage };
 }

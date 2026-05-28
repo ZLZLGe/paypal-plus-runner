@@ -57,7 +57,8 @@ export class RoxyClient {
   }
 
   chooseProxyAsn() {
-    return chooseAsnForTemplate(this.proxy.username_template || "", this.proxy.asn_pools, "JP");
+    const defaultRegion = this.proxy.default_region || this.config.requiredRegion || "US";
+    return chooseAsnForTemplate(this.proxy.username_template || "", this.proxy.asn_pools, defaultRegion);
   }
 
   buildProxyUsername(sid, asn = "") {

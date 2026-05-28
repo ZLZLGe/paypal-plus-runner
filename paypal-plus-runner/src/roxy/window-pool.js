@@ -1,6 +1,7 @@
 import { RoxyClient } from "./client.js";
 import { connectOverCdp } from "../browser/connect-cdp.js";
-import { probeWindowExitIp } from "./proxy-probe.js";
+import { probeIp, probeWindowExitIp } from "./proxy-probe.js";
+import { lookupCountryCodeForIp } from "../checkout-conversion/geo-probe.js";
 import { sleep } from "../utils/sleep.js";
 
 function buildWindowName(prefix, index) {
@@ -89,12 +90,44 @@ export async function createRoxyWindowPool(config, { count, logger } = {}) {
     let probe = { ok: false, ip: "", error: "" };
     if (roxyCfg.probeExitIp !== false) {
       try {
-        probe = await probeWindowExitIp(connected.page, {
+        const probeOptions = {
           probeUrl: String(roxyCfg.ipProbeUrl || "https://api.ipify.org?format=json"),
           timeoutMs: Number(roxyCfg.ipProbeTimeoutMs || 20000),
-        });
+        };
+        probe = localProxyUrl
+          ? await probeIp({ ...probeOptions, proxyUrl: localProxyUrl })
+          : await probeWindowExitIp(connected.page, probeOptions);
+        const requiredCountry = String(roxyCfg.requireExitCountry || "").trim().toUpperCase();
+        const configuredRegion = String(windowInfo.region || "").trim().toUpperCase();
+        if (requiredCountry && configuredRegion && configuredRegion !== requiredCountry) {
+          throw new Error(`roxy browser proxy region is ${configuredRegion}, expected ${requiredCountry}`);
+        }
+        if (requiredCountry && !probe.ok && !configuredRegion) {
+          throw new Error(`roxy browser exit probe failed before PayPal flow: ${probe.error || probe.status || "unknown"}`);
+        }
+        if (requiredCountry && probe.ip) {
+          probe.countryCode = await lookupCountryCodeForIp(probe.ip, {
+            timeoutMs: Number(roxyCfg.geoLookupTimeoutMs || 15000),
+            connectTimeoutMs: Number(roxyCfg.geoLookupConnectTimeoutMs || 8000),
+          });
+          if (!probe.countryCode && !configuredRegion) {
+            throw new Error(`roxy browser exit country could not be detected, expected ${requiredCountry}; ip=${probe.ip}`);
+          }
+          if (probe.countryCode && probe.countryCode !== requiredCountry) {
+            throw new Error(`roxy browser exit country is ${probe.countryCode}, expected ${requiredCountry}; ip=${probe.ip}`);
+          }
+        }
       } catch (error) {
         probe = { ok: false, ip: "", error: error.message };
+        if (roxyCfg.requireExitCountry) {
+          try {
+            await connected.browser?.close?.();
+          } catch {
+            // CDP may already be disconnected if the probe failed during navigation.
+          }
+          await client.closeWindow(dirId).catch(() => undefined);
+          throw error;
+        }
       }
     }
 
@@ -118,6 +151,7 @@ export async function createRoxyWindowPool(config, { count, logger } = {}) {
       asn: windowInfo.asn || "",
       region: windowInfo.region || "",
       exitIp: managed.exitIp,
+      exitCountry: managed.exitProbe?.countryCode || "",
       localProxyUrl: localProxyUrl ? "resolved" : "",
     });
     if (index < requested && createIntervalMs > 0) await sleep(createIntervalMs);

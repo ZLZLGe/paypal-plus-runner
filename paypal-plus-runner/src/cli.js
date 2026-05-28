@@ -10,6 +10,7 @@ import { getDatabaseStats, listPaypalPhones } from "./db/stats.js";
 import { runRunner } from "./runner.js";
 import { probeLocalJpCheckoutProxy } from "./checkout-conversion/probe-local-jp.js";
 import { probeRoxy } from "./roxy/probe.js";
+import { stringifySafeJson } from "./utils/safe-output.js";
 
 function commandFromArgv(argv) {
   if (argv[0] && !argv[0].startsWith("--")) {
@@ -86,7 +87,7 @@ async function main() {
 
   if (command === "start") {
     const result = await runRunner(config, args);
-    console.log(JSON.stringify(result, null, 2));
+    console.log(stringifySafeJson(result));
     return;
   }
 

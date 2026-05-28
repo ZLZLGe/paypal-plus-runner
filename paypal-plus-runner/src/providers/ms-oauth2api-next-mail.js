@@ -24,6 +24,12 @@ function normalizeMailList(payload) {
   return [];
 }
 
+function mailTimestamp(mail) {
+  const raw = mail?.date || mail?.receivedDateTime || mail?.received_at || mail?.created_at || mail?.time || "";
+  const parsed = Date.parse(String(raw || ""));
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
 async function fetchMailbox(baseUrl, account, mailbox, mode) {
   const endpoint = mode === "mail_all" ? "mail_all" : "mail_new";
   const url = new URL(`/api/${endpoint}`, String(baseUrl).replace(/\/+$/, ""));
@@ -48,11 +54,17 @@ export async function pollOpenAiEmailCode(account, config = {}, options = {}) {
   const maxAttempts = Number(config.verification?.mailMaxAttempts || 60);
   const mode = String(config.verification?.mailFetchMode || "mail_new");
   const excludeCodes = new Set((options.excludeCodes || []).map((item) => String(item).trim()).filter(Boolean));
+  const minReceivedAt = Number(options.minReceivedAt || 0);
+  const minDateToleranceMs = Number(options.minDateToleranceMs ?? 30000);
   let lastSeen = "";
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     for (const mailbox of mailboxes) {
       const payload = await fetchMailbox(baseUrl, account, mailbox, mode);
-      for (const mail of normalizeMailList(payload)) {
+      const mails = normalizeMailList(payload)
+        .map((mail) => ({ mail, ts: mailTimestamp(mail) }))
+        .filter(({ ts }) => !minReceivedAt || (ts && ts >= minReceivedAt - minDateToleranceMs))
+        .sort((a, b) => b.ts - a.ts);
+      for (const { mail } of mails) {
         const code = extractMailCode(mail);
         if (code) {
           lastSeen = code;

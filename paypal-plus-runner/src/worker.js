@@ -7,8 +7,18 @@ import { createRun, finishRun, updateRun } from "./db/run-history-store.js";
 import { insertPlusAccount } from "./db/plus-store.js";
 import { prepareRunContext, runWorkflow } from "./workflow.js";
 import { connectOverCdp } from "./browser/connect-cdp.js";
+import { cleanupBrowserData } from "./browser/cleanup.js";
 import { WorkflowNotImplementedError } from "./utils/errors.js";
 import { writeFailureArtifacts } from "./utils/artifacts.js";
+
+function isRiskError(error) {
+  const text = [
+    error?.code,
+    error?.message,
+    error?.name,
+  ].filter(Boolean).join(" ");
+  return /PAYPAL_RISK_BLOCKED|DataDome|risk\/DataDome|risk block|paypal_datadome/i.test(text);
+}
 
 export class Worker {
   constructor({ id, db = null, config, logger, dryRun = false, windowInfo = null }) {
@@ -31,19 +41,21 @@ export class Worker {
     if (this.ownsDb) this.db.close();
   }
 
-  async maybeRotateWindowProxy() {
+  async maybeRotateWindowProxy({ force = false, reason = "" } = {}) {
     const roxy = this.config.roxy || {};
     const info = this.windowInfo;
     if (!info?.client || !info?.dirId) return null;
     const every = Math.max(0, Number.parseInt(String(roxy.rotateProxyEveryAccounts || 0), 10));
     const rotatePerAccount = roxy.rotateProxyPerAccount === true;
-    const shouldRotate = rotatePerAccount || (every > 0 && info.accountRuns > 0 && info.accountRuns % every === 0);
+    const shouldRotate = force || rotatePerAccount || (every > 0 && info.accountRuns > 0 && info.accountRuns % every === 0);
     if (!shouldRotate) return null;
     this.logger.info("rotating roxy proxy for window", {
       dirId: info.dirId,
       accountRuns: info.accountRuns,
       rotatePerAccount,
       every,
+      force,
+      reason,
     });
     const result = await info.client.modifyWindowProxy(info.dirId, {
       reopen: roxy.reopenWindowOnProxyRotate !== false,
@@ -66,11 +78,50 @@ export class Worker {
       info.context = connected.context;
       info.page = connected.page;
     }
+    try {
+      const { RoxyClient } = await import("./roxy/client.js");
+      info.localProxyUrl = await RoxyClient.buildLocalWindowProxyUrlWithRetry(info.dirId, {
+        attempts: Number(roxy.localProxyResolveAttempts || 10),
+        delayMs: Number(roxy.localProxyResolveDelayMs || 750),
+      });
+    } catch (error) {
+      this.logger.warn("local roxy proxy resolve after rotation failed", {
+        dirId: info.dirId,
+        error: error.message,
+      });
+    }
     return result;
+  }
+
+  async maybeRotateWindowProxyAfterFailure(error) {
+    const roxy = this.config.roxy || {};
+    const risk = isRiskError(error);
+    const shouldRotate = (risk && roxy.rotateProxyOnRiskErrors !== false)
+      || (!risk && roxy.rotateProxyOnFailure === true);
+    if (!shouldRotate) return null;
+    try {
+      return await this.maybeRotateWindowProxy({
+        force: true,
+        reason: risk ? "risk_error" : "account_failure",
+      });
+    } catch (rotateError) {
+      this.logger.warn("roxy proxy rotation after failure failed", {
+        dirId: this.windowInfo?.dirId || "",
+        risk,
+        error: rotateError.message,
+      });
+      return null;
+    }
   }
 
   async runOnce() {
     await this.maybeRotateWindowProxy();
+    if (this.config.runner?.cleanupBrowserDataBeforeEachAccount !== false && this.windowInfo?.context && this.windowInfo?.page) {
+      await cleanupBrowserData(this.windowInfo.context, {
+        page: this.windowInfo.page,
+        logger: this.logger,
+      });
+    }
     const account = leaseNextOutlookEmail(this.db, {
       maxAttempts: Number(this.config.runner?.maxAttemptsPerEmail || 5),
     });
@@ -133,7 +184,7 @@ export class Worker {
       if (this.windowInfo) this.windowInfo.accountRuns += 1;
       return { status: "done", runId, result };
     } catch (error) {
-      const retryable = error instanceof WorkflowNotImplementedError ? true : true;
+      const retryable = error instanceof WorkflowNotImplementedError ? true : error.retryable !== false;
       try {
         const artifactContext = context || {
           runId,
@@ -161,6 +212,11 @@ export class Worker {
         maxAttempts: Number(this.config.runner?.maxAttemptsPerEmail || 5),
       });
       finishRun(this.db, runId, { status: "failed", error: error.message });
+      if (this.windowInfo) this.windowInfo.accountRuns += 1;
+      await this.maybeRotateWindowProxyAfterFailure(error);
+      error.runId = error.runId || runId;
+      error.email = error.email || account.email;
+      error.retryable = retryable;
       throw error;
     }
   }
@@ -170,7 +226,23 @@ export class Worker {
     try {
       while (!this.stopped) {
         if (limit > 0 && results.length >= limit) break;
-        const result = await this.runOnce();
+        let result;
+        try {
+          result = await this.runOnce();
+        } catch (error) {
+          if (!error.runId) throw error;
+          result = {
+            status: "failed",
+            runId: error.runId || "",
+            email: error.email || "",
+            retryable: error.retryable !== false,
+            error: error.message,
+          };
+          if (this.config.runner?.continueOnAccountFailure === false) {
+            results.push(result);
+            throw error;
+          }
+        }
         if (result.status === "empty") break;
         results.push(result);
         if (this.dryRun) break;

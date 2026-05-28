@@ -46,6 +46,12 @@ For the self-hosted route, `local_jp_proxy` supports two modes:
 
 The local provider renders `{SID}` and `{ASN}`, probes the configured probe URL, requires JP exit by default, creates the ChatGPT checkout session, then initializes Stripe hosted checkout when ChatGPT does not already return a hosted PayPal URL.
 
+PayPal checkout creation matches the original plugin mode: the checkout payload uses `country=US`, `currency=USD`, and `checkout_ui_mode=hosted`. The JP proxy applies only to the checkout link creation request; browser/Roxy and PayPal page traffic stay on the configured US proxy.
+
+The runner opens Stripe hosted long checkout URLs such as `https://checkout.stripe.com/c/pay/...` by default (`checkoutConversion.requireStripeHostedUrl=true`). It does not fall back to short `https://chatgpt.com/checkout/...` links. If a generated JP proxy session does not probe as JP, the local provider retries with a fresh SID/ASN according to `checkoutConversion.localJpProxy.proxyRetryAttempts`.
+
+If the hosted page shows a non-zero amount due today, `checkoutConversion.zeroAmountRetryMax` controls how many new JP hosted URLs are generated before the email is marked failed and the next database email is used.
+
 ## Failure Artifacts
 
 On non-dry-run failure, the runner writes diagnostics under `output/<runId>/`:

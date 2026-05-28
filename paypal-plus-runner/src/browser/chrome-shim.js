@@ -1,11 +1,20 @@
 export function buildChromeShim() {
   return `
 (() => {
-  if (globalThis.chrome?.runtime?.onMessage) return;
-  const listeners = [];
-  const storageData = {};
+  if (globalThis.chrome?.runtime?.__dispatchMessage) return;
+  const state = globalThis.__PAYPAL_PLUS_RUNNER_CHROME_SHIM__ || {
+    listeners: [],
+    storageData: {},
+  };
+  globalThis.__PAYPAL_PLUS_RUNNER_CHROME_SHIM__ = state;
+  const existingChrome = globalThis.chrome || {};
+  const existingRuntime = existingChrome.runtime || {};
+  const listeners = state.listeners;
+  const storageData = state.storageData;
   globalThis.chrome = {
+    ...existingChrome,
     runtime: {
+      ...existingRuntime,
       sendMessage(message, callback) {
         if (message?.type === "LOG") {
           console.debug("[runner:content-log]", message?.payload?.level || "info", message?.payload?.message || "");
@@ -43,7 +52,7 @@ export function buildChromeShim() {
         });
       },
     },
-    storage: {
+    storage: existingChrome.storage || {
       local: {
         async get(keys) {
           if (!keys) return { ...storageData };

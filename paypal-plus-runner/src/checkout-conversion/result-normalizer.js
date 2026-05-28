@@ -1,6 +1,7 @@
 export function normalizeCheckoutResult(data = {}, provider = "") {
   const preferredCheckoutUrl = String(
     data.preferredCheckoutUrl
+    || data.stripeHostedCheckoutUrl
     || data.hostedCheckoutUrl
     || data.convertedCheckoutUrl
     || data.chatgptCheckoutUrl
@@ -19,6 +20,8 @@ export function normalizeCheckoutResult(data = {}, provider = "") {
     checkoutUrl: String(data.checkoutUrl || ""),
     chatgptCheckoutUrl: String(data.chatgptCheckoutUrl || data.convertedCheckoutUrl || ""),
     hostedCheckoutUrl: String(data.hostedCheckoutUrl || data.stripe_payurl || ""),
+    stripeHostedCheckoutUrl: String(data.stripeHostedCheckoutUrl || ""),
+    openaiHostedCheckoutUrl: String(data.openaiHostedCheckoutUrl || ""),
     preferredCheckoutUrl,
     processorEntity: String(data.processorEntity || "openai_llc"),
     country: String(data.country || "US"),

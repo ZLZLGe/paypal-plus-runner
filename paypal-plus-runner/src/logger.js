@@ -1,6 +1,8 @@
+import { redactForCliOutput } from "./utils/safe-output.js";
+
 export function createLogger(scope = "runner") {
   function write(level, message, meta = undefined) {
-    const suffix = meta === undefined ? "" : ` ${JSON.stringify(meta)}`;
+    const suffix = meta === undefined ? "" : ` ${JSON.stringify(redactForCliOutput(meta))}`;
     process.stdout.write(`[${new Date().toISOString()}] [${level}] [${scope}] ${message}${suffix}\n`);
   }
   return {

@@ -9,13 +9,19 @@
     "skipOpenChatgpt": false,
     "debugAccessToken": "",
     "pageLoadTimeoutMs": 120000,
+    "openChatgptNavigationAttempts": 3,
+    "openChatgptNavigationRetryDelayMs": 1500,
     "checkoutTransitionTimeoutMs": 180000,
     "paypalHostedTimeoutMs": 900000,
     "paypalHostedStuckRefreshMs": 90000,
     "paypalVerificationMaxAttempts": 3,
     "cleanupBrowserDataBeforeEachAccount": true,
     "screenshotOnFailure": true,
-    "htmlSnapshotOnFailure": true
+    "htmlSnapshotOnFailure": true,
+    "continueOnAccountFailure": true,
+    "requirePlusSessionPlan": true,
+    "plusSessionVerifyTimeoutMs": 180000,
+    "plusSessionVerifyPollMs": 5000
   },
   "flow": {
     "plusModeEnabled": true,
@@ -30,9 +36,14 @@
     "paymentMethod": "paypal",
     "country": "US",
     "currency": "USD",
+    "checkoutUiMode": "hosted",
+    "isCouponFromQueryParam": false,
     "processorEntity": "openai_llc",
+    "openUrlPreference": "hosted",
     "useFreeTrialPromo": true,
     "alreadyPaidIsSuccess": true,
+    "requireStripeHostedUrl": true,
+    "zeroAmountRetryMax": 3,
     "maxAttempts": 3,
     "cloud": {
       "apiUrl": "https://your-checkout-converter.example.com/api/checkout",
@@ -48,8 +59,16 @@
       "geoLookupTimeoutMs": 15000,
       "requestTimeoutMs": 45000,
       "connectTimeoutMs": 15000,
+      "checkoutTransport": "curl_cffi",
+      "pythonExecutable": ".venv/bin/python",
+      "curlCffiScriptPath": "scripts/curl_cffi_request.py",
+      "impersonateBrowser": "chrome136",
+      "fallbackImpersonateBrowser": "chrome133a",
       "createStripeHostedUrl": true,
+      "preferStripeHostedUrl": true,
       "stripeInitTimeoutMs": 45000,
+      "proxyRetryAttempts": 5,
+      "proxyRetryDelayMs": 1000,
       "firstHopProxyUrl": "http://127.0.0.1:7890",
       "secondHopProxyUrl": "socks5://username-region-JP-asn-{ASN}-sid-{SID}-t-20:password@proxy-host:443",
       "asnPools": {
@@ -76,6 +95,8 @@
     "createIntervalMs": 0,
     "cdpConnectTimeoutMs": 45000,
     "probeExitIp": true,
+    "requiredRegion": "US",
+    "requireExitCountry": "US",
     "ipProbeUrl": "https://api.ipify.org?format=json",
     "ipProbeTimeoutMs": 20000,
     "localProxyResolveAttempts": 10,
@@ -160,7 +181,11 @@
   },
   "cpa": {
     "baseUrl": "",
-    "authorizationBearer": ""
+    "authorizationBearer": "",
+    "localJsonEnabled": true,
+    "localJsonDir": "cpa-json",
+    "pluginDir": "",
+    "relativeAuthDir": ".cli-proxy-api"
   },
   "output": {
     "dir": "output"

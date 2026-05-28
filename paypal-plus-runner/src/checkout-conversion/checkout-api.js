@@ -1,15 +1,16 @@
 export function buildCheckoutPayload(config = {}) {
+  const useFreeTrialPromo = config.useFreeTrialPromo !== false;
   return {
     entry_point: "all_plans_pricing_modal",
     plan_name: "chatgptplusplan",
-    checkout_ui_mode: "hosted",
+    checkout_ui_mode: String(config.checkoutUiMode || "hosted"),
     billing_details: {
       country: String(config.country || "US").toUpperCase(),
       currency: String(config.currency || "USD").toUpperCase(),
     },
     promo_campaign: {
-      promo_campaign_id: config.useFreeTrialPromo === false ? "" : "plus-1-month-free",
-      is_coupon_from_query_param: config.useFreeTrialPromo !== false,
+      promo_campaign_id: useFreeTrialPromo ? "plus-1-month-free" : "",
+      is_coupon_from_query_param: config.isCouponFromQueryParam ?? false,
     },
   };
 }

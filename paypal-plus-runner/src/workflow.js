@@ -9,6 +9,7 @@ import { fillPlusCheckoutStep } from "./steps/fill-plus-checkout.js";
 import { plusReturnConfirmStep } from "./steps/plus-return-confirm.js";
 import { sessionJsonImportStep } from "./steps/session-json-import.js";
 import { WorkflowNotImplementedError } from "./utils/errors.js";
+import { compactPageStateForLog, observePageState } from "./browser/page-utils.js";
 
 export const StepStatus = Object.freeze({
   DONE: "done",
@@ -19,6 +20,17 @@ export const StepStatus = Object.freeze({
 
 export function stepResult(status, reason, extra = {}) {
   return { status, reason, ...extra };
+}
+
+async function logObservedPageState(context, logger, message, extra = {}) {
+  if (!context.page || !logger) return;
+  const observed = await observePageState(context.page, {
+    timeoutMs: Number(context.config.runner?.pageObservationTimeoutMs || 1500),
+  }).catch((error) => ({ stage: "observe_failed", observeError: error.message, url: context.page.url() }));
+  logger.info(message, {
+    ...extra,
+    ...compactPageStateForLog(observed),
+  });
 }
 
 export async function prepareRunContext({ account, phoneLease, config, windowInfo = null, runId = "", workerId = "" }) {
@@ -86,11 +98,18 @@ export async function runWorkflow(context, { dryRun = false, logger } = {}) {
         context.completedSteps.push(name);
       }
       if (result?.sessionJson) context.sessionJson = result.sessionJson;
+      if (result?.cpaJsonPath) context.cpaJsonPath = result.cpaJsonPath;
+      if (result?.cpaJsonFileName) context.cpaJsonFileName = result.cpaJsonFileName;
       if (result?.checkout) context.checkout = result.checkout;
       logger?.info?.("workflow step complete", { step: name, status: result?.status || "done", reason: result?.reason || "" });
+      await logObservedPageState(context, logger, "page observation after workflow step", { step: name });
     } catch (error) {
       if (error instanceof WorkflowNotImplementedError) throw error;
       error.step = error.step || name;
+      await logObservedPageState(context, logger, "page observation after workflow step failure", {
+        step: name,
+        error: error.message,
+      }).catch(() => undefined);
       throw error;
     }
   }
@@ -102,6 +121,8 @@ export async function runWorkflow(context, { dryRun = false, logger } = {}) {
     skippedSteps: context.skippedSteps,
     results,
     sessionJson: context.sessionJson || results["session-json-import"]?.sessionJson || "",
+    cpaJsonPath: context.cpaJsonPath || results["session-json-import"]?.cpaJsonPath || "",
+    cpaJsonFileName: context.cpaJsonFileName || results["session-json-import"]?.cpaJsonFileName || "",
     roxyDirId: context.windowInfo?.dirId || "",
     roxyExitIp: context.windowInfo?.exitIp || "",
   };
