@@ -158,14 +158,14 @@ function localJpAttempts(local = {}) {
 
 function buildStripePayload(publishableKey) {
   const fields = new URLSearchParams();
-  fields.set("browser_locale", "zh-CN");
+  fields.set("browser_locale", "ja-JP");
   fields.set("browser_timezone", "Asia/Shanghai");
   fields.set("elements_session_client[client_betas][0]", "custom_checkout_server_updates_1");
   fields.set("elements_session_client[client_betas][1]", "custom_checkout_manual_approval_1");
   fields.set("elements_session_client[elements_init_source]", "custom_checkout");
   fields.set("elements_session_client[referrer_host]", "chatgpt.com");
   fields.set("elements_session_client[stripe_js_id]", crypto.randomUUID());
-  fields.set("elements_session_client[locale]", "zh-CN");
+  fields.set("elements_session_client[locale]", "ja-JP");
   fields.set("elements_session_client[is_aggregation_expected]", "false");
   fields.set("elements_options_client[saved_payment_method][enable_save]", "never");
   fields.set("elements_options_client[saved_payment_method][enable_redisplay]", "never");

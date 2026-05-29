@@ -7,7 +7,7 @@ export async function createCloudCheckout({ accessToken, config }) {
   if (!apiUrl) throw new Error("checkoutConversion.cloud.apiUrl is empty");
   const headers = {
     Accept: "application/json",
-    "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+    "Accept-Language": "ja-JP,ja;q=0.9,en;q=0.8",
     "Content-Type": "application/json",
   };
   const useFreeTrialPromo = conversion.useFreeTrialPromo !== false;

@@ -1,6 +1,7 @@
 import { injectSignupFlow, dispatchChromeRuntimeMessage } from "../browser/inject.js";
 import { safeGoto } from "../browser/page-utils.js";
 import { detectLoggedInChatgpt } from "./signup-state.js";
+import { recoverSignupRedirectedLoginStep } from "./phone-flow.js";
 
 function positiveInt(value, fallback) {
   const parsed = Number.parseInt(String(value ?? ""), 10);
@@ -46,13 +47,14 @@ export async function detectProfileReadiness(page) {
     const isCallback = /\/api\/auth\/callback\/openai/i.test(url);
     const isGatewayTimeout = /gateway\s*time-?out|error reference number:\s*504|cf-error-details|cloudflare location/i.test(text);
     const hasCloudflareChallenge = /__CF\$cv|challenge-platform|cdn-cgi\/challenge|cf_chl/i.test(String(document.documentElement?.innerHTML || ""));
-    const hasOnboardingPrompt = /what brings you to chatgpt|we.?ll use this information to suggest ideas|school work personal tasks|fun and entertainment/i.test(text);
-    const hasLoggedInShell = /new chat|search chats/i.test(text)
-      && /chat history|projects|library|apps|codex/i.test(text);
+    const hasOnboardingPrompt = /what brings you to chatgpt|we.?ll use this information to suggest ideas|school work personal tasks|fun and entertainment|ChatGPT\s*を選んだ理由|この情報は、あなたに役に立つと思われるアイデアを提案するために使用されます|学校|職場|個人的なタスク|娯楽/i.test(text);
+    const hasLoggedInShell = /new chat|search chats|新しいチャット|チャットを検索/i.test(text)
+      && /chat history|projects|library|apps|codex|チャット履歴|プロジェクト|ライブラリ|アプリ/i.test(text);
     const hasCompletionInterstitial = /you.?re all set|by continuing, you agree to our terms|continue/i.test(text)
       && hasLoggedInShell;
     const isProfileRoute = /\/(?:create-account\/profile|u\/signup\/profile|signup\/profile|about-you)(?:[/?#]|$)/i
       .test(String(location.pathname || ""));
+    const isOpenAiLoginPage = /\/\/auth\.openai\.com\/log-in(?:[/?#]|$)/i.test(url);
     const hasProfileCopy = /tell us about yourself|what should we call you|how old are you|date of birth|姓名|生日/i.test(text);
     const hasProfileForm = Boolean((nameInput || birthdayInput) || (isProfileRoute && hasProfileCopy));
     return {
@@ -65,6 +67,7 @@ export async function detectProfileReadiness(page) {
       hasLoggedInShell,
       hasCompletionInterstitial,
       hasProfileForm,
+      isOpenAiLoginPage,
       hasNameInput: Boolean(nameInput),
       hasBirthdayInput: Boolean(birthdayInput),
       isProfileRoute,
@@ -74,6 +77,7 @@ export async function detectProfileReadiness(page) {
     url: page.url(),
     isCallback: /\/api\/auth\/callback\/openai/i.test(page.url()),
     isGatewayTimeout: false,
+    isOpenAiLoginPage: /\/\/auth\.openai\.com\/log-in(?:[/?#]|$)/i.test(page.url()),
     hasProfileForm: false,
   }));
 }
@@ -100,17 +104,17 @@ export async function dismissOnboardingPrompt(page) {
       el?.getAttribute?.("title"),
     ].filter(Boolean).join(" ").replace(/\s+/g, " ").trim();
     const text = String(document.body?.innerText || document.body?.textContent || "").replace(/\s+/g, " ");
-    const hasOnboardingPrompt = /what brings you to chatgpt|we.?ll use this information to suggest ideas|school work personal tasks|fun and entertainment/i.test(text);
+    const hasOnboardingPrompt = /what brings you to chatgpt|we.?ll use this information to suggest ideas|school work personal tasks|fun and entertainment|ChatGPT\s*を選んだ理由|この情報は、あなたに役に立つと思われるアイデアを提案するために使用されます|学校|職場|個人的なタスク|娯楽/i.test(text);
     if (!hasOnboardingPrompt) {
       return { clicked: false, reason: "no_onboarding_prompt", url: location.href };
     }
     const actions = Array.from(document.querySelectorAll(
       "button, a, [role='button'], input[type='button'], input[type='submit']",
     )).filter((el) => visible(el) && enabled(el));
-    const skip = actions.find((el) => /^skip$/i.test(actionText(el)));
-    const personal = actions.find((el) => /personal tasks/i.test(actionText(el)));
-    const next = actions.find((el) => /^next$/i.test(actionText(el)));
-    const continueButton = actions.find((el) => /^continue$/i.test(actionText(el)));
+    const skip = actions.find((el) => /^(skip|スキップする)$/i.test(actionText(el)));
+    const personal = actions.find((el) => /personal tasks|個人的なタスク/i.test(actionText(el)));
+    const next = actions.find((el) => /^(next|次へ)$/i.test(actionText(el)));
+    const continueButton = actions.find((el) => /^(continue|続行)$/i.test(actionText(el)));
     const target = skip || continueButton || personal || next;
     if (!target) {
       return {
@@ -161,6 +165,9 @@ async function waitForProfileReadyOrLoggedIn(context, { logger } = {}) {
     }
     if (lastState.hasProfileForm) {
       return { state: "profile", profileState: lastState };
+    }
+    if (lastState.isOpenAiLoginPage) {
+      return { state: "openai_login", profileState: lastState };
     }
 
     if (lastState.isGatewayTimeout && reloads < callbackReloadAttempts) {
@@ -219,6 +226,21 @@ export async function fillProfileStep(context, { logger } = {}) {
     return { status: "skipped", reason: "already_logged_in_no_profile_page", loggedInState };
   }
   const readyState = await waitForProfileReadyOrLoggedIn(context, { logger });
+  if (readyState.state === "openai_login" && context.accountIdentifierType === "phone") {
+    const recovery = await recoverSignupRedirectedLoginStep(context, { logger });
+    if (recovery.recovered) {
+      const recoveredState = await waitForProfileReadyOrLoggedIn(context, { logger });
+      if (recoveredState.state === "logged_in") {
+        return { status: "skipped", reason: "already_logged_in_after_signup_redirected_login", loggedInState: recoveredState.loggedInState, recovery };
+      }
+      if (recoveredState.state === "profile") {
+        readyState.state = "profile";
+        readyState.profileState = recoveredState.profileState;
+      } else if (recoveredState.state === "timeout") {
+        throw new Error(`注册后手机号登录恢复超时。URL: ${recoveredState.profileState?.url || context.page.url()}`);
+      }
+    }
+  }
   if (readyState.state === "logged_in") {
     return { status: "skipped", reason: "already_logged_in_no_profile_page", loggedInState: readyState.loggedInState };
   }

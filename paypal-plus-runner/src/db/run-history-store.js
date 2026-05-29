@@ -9,7 +9,21 @@ export function createRun(db, { runId, email = "", outlookEmailId = null, worker
 }
 
 export function updateRun(db, runId, patch = {}) {
-  const allowed = ["email", "status", "current_step", "roxy_dir_id", "roxy_exit_ip", "artifact_dir", "error", "finished_at"];
+  const allowed = [
+    "email",
+    "status",
+    "current_step",
+    "roxy_dir_id",
+    "roxy_exit_ip",
+    "outlook_email_id",
+    "artifact_dir",
+    "error",
+    "finished_at",
+    "account_identifier_type",
+    "account_identifier",
+    "cpa_upload_status",
+    "callback_json_path",
+  ];
   const entries = Object.entries(patch).filter(([key]) => allowed.includes(key));
   if (entries.length === 0) return;
   const sets = entries.map(([key]) => `${key} = ?`);

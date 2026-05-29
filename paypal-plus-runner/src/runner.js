@@ -6,6 +6,10 @@ import { Worker } from "./worker.js";
 import { createLogger } from "./logger.js";
 import { createRoxyWindowPool } from "./roxy/window-pool.js";
 
+function isSmsOauthFlow(config = {}) {
+  return String(config.flow?.plusAccountAccessStrategy || "").trim().toLowerCase() === "sms_oauth";
+}
+
 export async function runRunner(config, args = {}) {
   const logger = createLogger("runner");
   const db = openDatabase(config.database.path);
@@ -27,7 +31,8 @@ export async function runRunner(config, args = {}) {
 
   db.close();
 
-  if (availableEmails <= 0) return { status: "empty", reason: "no_outlook_emails" };
+  const deferOutlookLease = isSmsOauthFlow(config);
+  if (!deferOutlookLease && availableEmails <= 0) return { status: "empty", reason: "no_outlook_emails" };
   if (availablePhones <= 0) return { status: "empty", reason: "no_paypal_phones" };
 
   if (dryRun) {
@@ -41,7 +46,11 @@ export async function runRunner(config, args = {}) {
     return { status: "ok", mode: "dry_run", results };
   }
 
-  const effectiveWindows = Math.max(1, Math.min(requestedWindows, availableEmails, availablePhones));
+  const effectiveWindows = Math.max(1, Math.min(
+    requestedWindows,
+    deferOutlookLease ? requestedWindows : availableEmails,
+    availablePhones,
+  ));
   const pool = await createRoxyWindowPool(config, { count: effectiveWindows, logger });
   const windows = pool.all().map((item) => ({ ...item, client: pool.client }));
   const perWorkerLimit = limit > 0 ? Math.max(1, Math.ceil(limit / windows.length)) : 0;

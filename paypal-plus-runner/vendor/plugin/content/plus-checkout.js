@@ -17,6 +17,21 @@ const PAYPAL_DIAGNOSTIC_LOG_INTERVAL_MS = 5000;
 const PLUS_PAYMENT_METHOD_PAYPAL = 'paypal';
 const PLUS_PAYMENT_METHOD_GOPAY = 'gopay';
 const DEFAULT_CONVERTED_CHECKOUT_PROCESSOR_ENTITY = 'openai_llc';
+const HOSTED_OPENAI_PAYPAL_ITEM_SELECTOR = 'div[data-testid="paypal-accordion-item"]';
+const HOSTED_OPENAI_PAYPAL_BUTTON_SELECTOR = 'button[data-testid="paypal-accordion-item-button"]';
+const HOSTED_OPENAI_PAYPAL_RADIO_SELECTOR = 'input#payment-method-accordion-item-title-paypal[name="payment-method-accordion-item-title"][type="radio"][value="paypal"]';
+const HOSTED_OPENAI_PAYPAL_LABEL_SELECTOR = 'div#payment-method-label-paypal';
+const HOSTED_OPENAI_EMAIL_SELECTOR = 'input#email[name="email"]';
+const HOSTED_OPENAI_COUNTRY_SELECT_SELECTOR = 'select#billingCountry[name="billingCountry"]';
+const HOSTED_OPENAI_ADDRESS_LINE1_SELECTOR = 'input#billingAddressLine1[name="billingAddressLine1"]';
+const HOSTED_OPENAI_CITY_SELECTOR = 'input#billingLocality[name="billingLocality"]';
+const HOSTED_OPENAI_POSTAL_CODE_SELECTOR = 'input#billingPostalCode[name="billingPostalCode"]';
+const HOSTED_OPENAI_REGION_SELECT_SELECTOR = 'select#billingAdministrativeArea[name="billingAdministrativeArea"]';
+const HOSTED_OPENAI_TERMS_CHECKBOX_SELECTOR = 'input#termsOfServiceConsentCheckbox[name="termsOfServiceConsentCheckbox"][type="checkbox"]';
+const HOSTED_OPENAI_SUBMIT_BUTTON_SELECTORS = [
+  'button[data-testid="hosted-payment-submit-button"][type="submit"]',
+  'button[data-testid="submit-button"][type="submit"]',
+];
 const PAYMENT_METHOD_CONFIGS = {
   [PLUS_PAYMENT_METHOD_PAYPAL]: {
     id: PLUS_PAYMENT_METHOD_PAYPAL,
@@ -235,6 +250,31 @@ function fillHostedOpenAiInputBySelector(selector, value) {
   return true;
 }
 
+function fillHostedOpenAiContactEmail(email) {
+  const value = normalizeText(email);
+  const input = document.querySelector(HOSTED_OPENAI_EMAIL_SELECTOR);
+  if (!input || !isVisibleElement(input) || !value) {
+    return {
+      filled: false,
+      found: Boolean(input),
+      skipped: true,
+      reason: value ? 'input_not_found' : 'empty_email',
+      value: input?.value || '',
+    };
+  }
+  const currentValue = normalizeText(input.value);
+  if (currentValue.toLowerCase() === value.toLowerCase()) {
+    return { filled: true, found: true, alreadyFilled: true, value: currentValue };
+  }
+  if (currentValue) {
+    return { filled: false, found: true, skipped: true, reason: 'existing_value', value: currentValue };
+  }
+  if (currentValue !== value) {
+    fillInput(input, value);
+  }
+  return { filled: true, found: true, value: input.value || value };
+}
+
 function fillHostedOpenAiSelectByIdText(id, text) {
   const select = document.getElementById(String(id || '').trim());
   const expected = normalizeText(text);
@@ -256,28 +296,31 @@ function fillHostedOpenAiSelectByIdText(id, text) {
 }
 
 function findHostedOpenAiPayPalButton() {
-  return document.querySelector('[data-testid="paypal-accordion-item-button"]')
-    || document.querySelector('.paypal-accordion-item button');
+  return document.querySelector(HOSTED_OPENAI_PAYPAL_BUTTON_SELECTOR);
+}
+
+function findHostedOpenAiPayPalRadio() {
+  return document.querySelector(HOSTED_OPENAI_PAYPAL_RADIO_SELECTOR);
+}
+
+function findHostedOpenAiPayPalItem() {
+  const item = document.querySelector(HOSTED_OPENAI_PAYPAL_ITEM_SELECTOR);
+  if (
+    !item
+    || !item.querySelector(HOSTED_OPENAI_PAYPAL_RADIO_SELECTOR)
+    || !item.querySelector(HOSTED_OPENAI_PAYPAL_LABEL_SELECTOR)
+  ) {
+    return null;
+  }
+  return item;
 }
 
 function findHostedOpenAiSubmitButton() {
-  const direct = document.querySelector('button[data-testid="submit-button"]')
-    || document.querySelector('button[data-testid="hosted-payment-submit-button"]')
-    || document.querySelector('button[data-atomic-wait-intent="Submit_Email"]')
-    || document.querySelector('button.SubmitButton--complete');
+  const direct = document.querySelector(HOSTED_OPENAI_SUBMIT_BUTTON_SELECTORS.join(', '));
   if (direct) {
     return direct;
   }
-  const buttons = Array.from(document.querySelectorAll('button'));
-  return buttons.find((button) => {
-    const text = normalizeText(button.textContent || '');
-    return text === '下一页'
-      || text === 'Next'
-      || text === 'Pay'
-      || text === 'Continue'
-      || text === 'Agree'
-      || text.toLowerCase().includes('subscribe');
-  }) || null;
+  return null;
 }
 
 function dispatchHostedOpenAiClick(button) {
@@ -385,6 +428,139 @@ async function fillHostedOpenAiVerificationCode(verificationCode = '') {
   };
 }
 
+function getVisibleHostedOpenAiPayPalButton() {
+  const button = findHostedOpenAiPayPalButton();
+  return button && isVisibleElement(button) && isEnabledControl(button) ? button : null;
+}
+
+function getHostedOpenAiExactPayPalTargets() {
+  const targets = [
+    findHostedOpenAiPayPalItem(),
+    findHostedOpenAiPayPalRadio(),
+    findHostedOpenAiPayPalButton(),
+  ].filter(Boolean);
+  return Array.from(new Set(targets)).filter((target) => isEnabledControl(target));
+}
+
+function isHostedOpenAiPayPalSelected() {
+  const radio = findHostedOpenAiPayPalRadio();
+  const item = findHostedOpenAiPayPalItem();
+  return Boolean(
+    radio?.checked === true
+    || radio?.getAttribute?.('aria-checked') === 'true'
+    || item?.getAttribute?.('aria-selected') === 'true'
+    || item?.getAttribute?.('data-selected') === 'true'
+  );
+}
+
+async function waitForHostedOpenAiPayPalSelected(timeoutMs = 2500) {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    throwIfStopped();
+    if (isHostedOpenAiPayPalSelected()) {
+      return true;
+    }
+    await sleep(150);
+  }
+  return isHostedOpenAiPayPalSelected();
+}
+
+async function selectHostedOpenAiPayPalExact() {
+  if (isHostedOpenAiPayPalSelected()) {
+    return { selected: true, alreadySelected: true, targetCount: getHostedOpenAiExactPayPalTargets().length };
+  }
+
+  const targets = getHostedOpenAiExactPayPalTargets();
+  if (!targets.length) {
+    return { selected: false, targetCount: 0 };
+  }
+
+  for (const target of targets) {
+    throwIfStopped();
+    await humanLikeClick(target);
+    if (await waitForHostedOpenAiPayPalSelected(2000)) {
+      return {
+        selected: true,
+        alreadySelected: false,
+        target: summarizeElementForDebug(target),
+        targetCount: targets.length,
+      };
+    }
+    await sleep(300);
+  }
+
+  return {
+    selected: false,
+    targetCount: targets.length,
+    targets: targets.map(summarizeElementForDebug).filter(Boolean),
+  };
+}
+
+function findHostedOpenAiExactCountrySelect() {
+  const select = document.querySelector(HOSTED_OPENAI_COUNTRY_SELECT_SELECTOR);
+  return select && isEnabledControl(select) ? select : null;
+}
+
+function hasHostedOpenAiExactAddressFields() {
+  return Boolean(
+    document.querySelector(HOSTED_OPENAI_ADDRESS_LINE1_SELECTOR)
+    || document.querySelector(HOSTED_OPENAI_CITY_SELECTOR)
+    || document.querySelector(HOSTED_OPENAI_POSTAL_CODE_SELECTOR)
+    || document.querySelector(HOSTED_OPENAI_REGION_SELECT_SELECTOR)
+  );
+}
+
+async function fillHostedOpenAiExactBillingAddress(address = {}) {
+  if (!hasHostedOpenAiExactAddressFields()) {
+    return { filled: false, reason: 'exact_address_fields_absent' };
+  }
+
+  const countrySelect = findHostedOpenAiExactCountrySelect();
+  if (!countrySelect) {
+    throw new Error(`hosted checkout 页面缺少精确国家选择框：${HOSTED_OPENAI_COUNTRY_SELECT_SELECTOR}`);
+  }
+  await selectCountryDropdown(countrySelect, address.countryCode || 'JP');
+  fillHostedOpenAiInputBySelector(HOSTED_OPENAI_ADDRESS_LINE1_SELECTOR, address.street || '');
+  fillHostedOpenAiInputBySelector(HOSTED_OPENAI_CITY_SELECTOR, address.city || '');
+  fillHostedOpenAiInputBySelector(HOSTED_OPENAI_POSTAL_CODE_SELECTOR, address.zip || '');
+  fillHostedOpenAiSelectByIdText('billingAdministrativeArea', address.state || '');
+  return {
+    filled: true,
+    country: getCountryDropdownValue(countrySelect),
+    address1: document.querySelector(HOSTED_OPENAI_ADDRESS_LINE1_SELECTOR)?.value || '',
+    city: document.querySelector(HOSTED_OPENAI_CITY_SELECTOR)?.value || '',
+    postalCode: document.querySelector(HOSTED_OPENAI_POSTAL_CODE_SELECTOR)?.value || '',
+    region: getRegionDropdownValue(document.querySelector(HOSTED_OPENAI_REGION_SELECT_SELECTOR)) || '',
+  };
+}
+
+function getVisibleHostedOpenAiSubmitButton() {
+  const button = findHostedOpenAiSubmitButton();
+  return button && isVisibleElement(button) && isEnabledControl(button) ? button : null;
+}
+
+function buildHostedOpenAiPayPalUnavailableError(reason = 'missing_exact_paypal_button') {
+  const diagnostics = getPayPalDiagnostics(reason);
+  const policy = diagnostics.stripeExpressCheckoutPaypalPolicy || {};
+  return new Error([
+    'PLUS_CHECKOUT_PAYPAL_UNAVAILABLE::Stripe hosted checkout 未暴露精确 PayPal 按钮',
+    `itemSelector=${HOSTED_OPENAI_PAYPAL_ITEM_SELECTOR}`,
+    `buttonSelector=${HOSTED_OPENAI_PAYPAL_BUTTON_SELECTOR}`,
+    `radioSelector=${HOSTED_OPENAI_PAYPAL_RADIO_SELECTOR}`,
+    `exactFound=${diagnostics.exactHostedPayPalButtonFound ? 'true' : 'false'}`,
+    `exactVisible=${diagnostics.exactHostedPayPalButtonVisible ? 'true' : 'false'}`,
+    `exactItemFound=${diagnostics.exactHostedPayPalItemFound ? 'true' : 'false'}`,
+    `exactRadioFound=${diagnostics.exactHostedPayPalRadioFound ? 'true' : 'false'}`,
+    `exactSelected=${diagnostics.exactHostedPayPalSelected ? 'true' : 'false'}`,
+    `stripeWalletPaypal=${policy.walletPaypal || ''}`,
+    `stripePaymentMethodPaypal=${policy.paymentMethodPaypal || ''}`,
+    `cardFieldsVisible=${diagnostics.cardFieldsVisible ? 'true' : 'false'}`,
+    `billingFieldsVisible=${diagnostics.billingFieldsVisible ? 'true' : 'false'}`,
+    `submitButtonVisible=${diagnostics.hostedSubmitButtonVisible ? 'true' : 'false'}`,
+    `paypalCandidateCount=${diagnostics.paypalCandidates.length}`,
+  ].join('; '));
+}
+
 async function runHostedOpenAiCheckoutStep(payload = {}) {
   await waitForDocumentComplete();
   if (!isHostedOpenAiCheckoutPage()) {
@@ -408,23 +584,22 @@ async function runHostedOpenAiCheckoutStep(payload = {}) {
   }
 
   await sleep(2000);
-  const payPalButton = findHostedOpenAiPayPalButton();
-  if (payPalButton) {
-    simulateClick(payPalButton);
-    await sleep(500);
-    simulateClick(payPalButton);
+  const paypalSelection = await selectHostedOpenAiPayPalExact();
+  if (!paypalSelection.selected) {
+    const diagnostics = writePayPalDiagnostics('hosted checkout 精确 PayPal 节点未能选中，停止提交', 'error');
+    console.error('[MultiPage:plus-checkout] hosted checkout PayPal unavailable', diagnostics);
+    throw buildHostedOpenAiPayPalUnavailableError('exact_paypal_not_selected');
   }
 
   await sleep(3000);
 
-  const address = payload.address && typeof payload.address === 'object' ? payload.address : {};
-  await selectCountryDropdown(findCountryDropdown(), 'US');
-  fillHostedOpenAiInputBySelector('#billingAddressLine1', address.street || '');
-  fillHostedOpenAiInputBySelector('#billingLocality', address.city || '');
-  fillHostedOpenAiInputBySelector('#billingPostalCode', address.zip || '');
-  fillHostedOpenAiSelectByIdText('billingAdministrativeArea', address.state || '');
+  const contactEmail = normalizeText(payload.email || payload.registrationEmail || payload.guestEmail || '');
+  const emailFillResult = fillHostedOpenAiContactEmail(contactEmail);
 
-  const checkbox = document.getElementById('termsOfServiceConsentCheckbox');
+  const address = payload.address && typeof payload.address === 'object' ? payload.address : {};
+  const billingAddressResult = await fillHostedOpenAiExactBillingAddress(address);
+
+  const checkbox = document.querySelector(HOSTED_OPENAI_TERMS_CHECKBOX_SELECTOR);
   if (checkbox && !checkbox.checked) {
     simulateClick(checkbox);
   }
@@ -439,6 +614,10 @@ async function runHostedOpenAiCheckoutStep(payload = {}) {
   const clickResult = await clickHostedOpenAiSubmitButton(0);
   return {
     ...clickResult,
+    paypalSelection,
+    contactEmail,
+    emailFillResult,
+    billingAddressResult,
     hostedVerificationVisible: hasHostedOpenAiVerificationPopup(),
   };
 }
@@ -933,6 +1112,33 @@ function getPaymentTextPreview(limit = 10) {
     .slice(0, limit);
 }
 
+function readStripeExpressCheckoutPaypalPolicy() {
+  const sources = [
+    ...Array.from(document.querySelectorAll('iframe')).map((frame) => frame.getAttribute('src') || ''),
+    location.href,
+  ].filter(Boolean);
+  const expressCheckoutSource = sources.find((source) => /express-checkout/i.test(source) && /paypal/i.test(source))
+    || sources.find((source) => /paypal/i.test(source))
+    || '';
+  const decoded = (() => {
+    try {
+      return decodeURIComponent(expressCheckoutSource);
+    } catch {
+      return expressCheckoutSource;
+    }
+  })();
+  const pick = (key) => {
+    if (!decoded) return '';
+    const escaped = String(key).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return decoded.match(new RegExp(`${escaped}=([^&]+)`, 'i'))?.[1] || '';
+  };
+  return {
+    walletPaypal: pick('publicOptions[wallets][paypal]'),
+    paymentMethodPaypal: pick('publicOptions[paymentMethods][paypal]'),
+    sourceMatched: Boolean(expressCheckoutSource),
+  };
+}
+
 function getPayPalDiagnostics(reason = '') {
   return getPaymentMethodDiagnostics(PLUS_PAYMENT_METHOD_PAYPAL, reason);
 }
@@ -943,12 +1149,36 @@ function getGoPayDiagnostics(reason = '') {
 
 function getPaymentMethodDiagnostics(method = PLUS_PAYMENT_METHOD_PAYPAL, reason = '') {
   const config = getPaymentMethodConfig(method);
+  const exactHostedPayPalButton = findHostedOpenAiPayPalButton();
+  const exactHostedPayPalItem = findHostedOpenAiPayPalItem();
+  const exactHostedPayPalRadio = findHostedOpenAiPayPalRadio();
+  const hostedSubmitButton = findHostedOpenAiSubmitButton();
   return {
     reason,
     url: location.href,
     readyState: document.readyState,
     paymentMethod: config.id,
     paymentMethodLabel: config.label,
+    exactHostedPayPalButtonSelector: HOSTED_OPENAI_PAYPAL_BUTTON_SELECTOR,
+    exactHostedPayPalButtonFound: Boolean(exactHostedPayPalButton),
+    exactHostedPayPalButtonVisible: Boolean(exactHostedPayPalButton && isVisibleElement(exactHostedPayPalButton)),
+    exactHostedPayPalButtonEnabled: Boolean(exactHostedPayPalButton && isEnabledControl(exactHostedPayPalButton)),
+    exactHostedPayPalButton: summarizeElementForDebug(exactHostedPayPalButton),
+    exactHostedPayPalItemSelector: HOSTED_OPENAI_PAYPAL_ITEM_SELECTOR,
+    exactHostedPayPalItemFound: Boolean(exactHostedPayPalItem),
+    exactHostedPayPalItemVisible: Boolean(exactHostedPayPalItem && isVisibleElement(exactHostedPayPalItem)),
+    exactHostedPayPalItem: summarizeElementForDebug(exactHostedPayPalItem),
+    exactHostedPayPalRadioSelector: HOSTED_OPENAI_PAYPAL_RADIO_SELECTOR,
+    exactHostedPayPalRadioFound: Boolean(exactHostedPayPalRadio),
+    exactHostedPayPalRadioChecked: Boolean(exactHostedPayPalRadio?.checked === true),
+    exactHostedPayPalRadioAriaChecked: exactHostedPayPalRadio?.getAttribute?.('aria-checked') || '',
+    exactHostedPayPalSelected: isHostedOpenAiPayPalSelected(),
+    hostedSubmitButtonSelectors: HOSTED_OPENAI_SUBMIT_BUTTON_SELECTORS,
+    hostedSubmitButtonVisible: Boolean(hostedSubmitButton && isVisibleElement(hostedSubmitButton)),
+    hostedSubmitButton: summarizeElementForDebug(hostedSubmitButton),
+    hostedExactAddressFieldsPresent: hasHostedOpenAiExactAddressFields(),
+    hostedExactCountrySelectFound: Boolean(findHostedOpenAiExactCountrySelect()),
+    stripeExpressCheckoutPaypalPolicy: readStripeExpressCheckoutPaypalPolicy(),
     paymentCandidates: getPaymentMethodCandidateSummaries(config.id),
     paypalCandidates: getPayPalCandidateSummaries(),
     gopayCandidates: getGoPayCandidateSummaries(),
@@ -2132,14 +2362,27 @@ async function inspectPlusCheckoutState(options = {}) {
     hostedOpenAiPage: isHostedOpenAiCheckoutPage(),
     hostedVerificationVisible: hasHostedOpenAiVerificationPopup(),
     hostedPayPalButtonFound: Boolean(findHostedOpenAiPayPalButton()),
+    hostedPayPalButtonVisible: Boolean(getVisibleHostedOpenAiPayPalButton()),
+    hostedPayPalItemFound: Boolean(findHostedOpenAiPayPalItem()),
+    hostedPayPalRadioFound: Boolean(findHostedOpenAiPayPalRadio()),
+    hostedPayPalSelected: isHostedOpenAiPayPalSelected(),
+    hostedPayPalItemSelector: HOSTED_OPENAI_PAYPAL_ITEM_SELECTOR,
+    hostedPayPalButtonSelector: HOSTED_OPENAI_PAYPAL_BUTTON_SELECTOR,
+    hostedPayPalRadioSelector: HOSTED_OPENAI_PAYPAL_RADIO_SELECTOR,
+    hostedEmailInputFound: Boolean(document.querySelector(HOSTED_OPENAI_EMAIL_SELECTOR)),
+    hostedEmailInputValue: document.querySelector(HOSTED_OPENAI_EMAIL_SELECTOR)?.value || '',
     countryText: readCountryText(),
     hasPayPal: Boolean(findPayPalPaymentMethodTarget()),
     hasGoPay: Boolean(findGoPayPaymentMethodTarget()),
     paypalCandidates: getPayPalCandidateSummaries(),
     gopayCandidates: getGoPayCandidateSummaries(),
+    stripeExpressCheckoutPaypalPolicy: readStripeExpressCheckoutPaypalPolicy(),
     paymentTextPreview: getPaymentTextPreview(),
     cardFieldsVisible: hasCreditCardFields(),
     billingFieldsVisible: hasBillingAddressFields(),
+    hostedSubmitButtonVisible: Boolean(getVisibleHostedOpenAiSubmitButton()),
+    hostedExactAddressFieldsPresent: hasHostedOpenAiExactAddressFields(),
+    hostedExactCountrySelectFound: Boolean(findHostedOpenAiExactCountrySelect()),
     hasSubscribeButton: Boolean(findSubscribeButton()),
     checkoutAmountSummary: getCheckoutAmountSummary(),
     addressFieldValues: {

@@ -1,15 +1,17 @@
 import { makeRunId } from "./utils/ids.js";
 import { openDatabase } from "./db/connection.js";
 import { initSchema } from "./db/schema.js";
-import { leaseNextOutlookEmail, markOutlookFailure, markOutlookPlusDone, markOutlookRunning } from "./db/outlook-store.js";
+import { leaseNextOutlookEmail, markOutlookFailure, markOutlookPlusDone, markOutlookRunning, releaseOutlookEmail } from "./db/outlook-store.js";
 import { leasePaypalPhone, releasePaypalPhone } from "./db/paypal-phone-store.js";
 import { createRun, finishRun, updateRun } from "./db/run-history-store.js";
+import { appendRunEvent } from "./db/run-event-store.js";
 import { insertPlusAccount } from "./db/plus-store.js";
-import { prepareRunContext, runWorkflow } from "./workflow.js";
+import { prepareRunContext, releaseDeferredOutlookOnFailure, runWorkflow } from "./workflow.js";
 import { connectOverCdp } from "./browser/connect-cdp.js";
 import { cleanupBrowserData } from "./browser/cleanup.js";
 import { WorkflowNotImplementedError } from "./utils/errors.js";
 import { writeFailureArtifacts } from "./utils/artifacts.js";
+import { cancelOpenAiPhoneActivation } from "./providers/openai-phone.js";
 
 function isRiskError(error) {
   const text = [
@@ -18,6 +20,20 @@ function isRiskError(error) {
     error?.name,
   ].filter(Boolean).join(" ");
   return /PAYPAL_RISK_BLOCKED|DataDome|risk\/DataDome|risk block|paypal_datadome/i.test(text);
+}
+
+function isSmsOauthFlow(config = {}) {
+  return String(config.flow?.plusAccountAccessStrategy || "").trim().toLowerCase() === "sms_oauth";
+}
+
+function emptyAccount() {
+  return {
+    id: null,
+    email: "",
+    password: "",
+    client_id: "",
+    refresh_token: "",
+  };
 }
 
 export class Worker {
@@ -122,15 +138,18 @@ export class Worker {
         logger: this.logger,
       });
     }
-    const account = leaseNextOutlookEmail(this.db, {
-      maxAttempts: Number(this.config.runner?.maxAttemptsPerEmail || 5),
-    });
+    const deferOutlookLease = isSmsOauthFlow(this.config);
+    const account = deferOutlookLease
+      ? emptyAccount()
+      : leaseNextOutlookEmail(this.db, {
+          maxAttempts: Number(this.config.runner?.maxAttemptsPerEmail || 5),
+        });
     if (!account) return { status: "empty" };
 
     const runId = makeRunId(this.id);
     let phoneLease = null;
     let context = null;
-    createRun(this.db, { runId, email: account.email, outlookEmailId: account.id, workerId: this.id });
+    createRun(this.db, { runId, email: account.email, outlookEmailId: account.id || null, workerId: this.id });
     updateRun(this.db, runId, {
       status: "running",
       current_step: "lease-paypal-phone",
@@ -139,7 +158,7 @@ export class Worker {
     });
 
     try {
-      markOutlookRunning(this.db, account.id);
+      if (account.id) markOutlookRunning(this.db, account.id);
       phoneLease = leasePaypalPhone(this.db, {
         workerId: this.id,
         runId,
@@ -150,7 +169,8 @@ export class Worker {
       }
       this.logger.info("leased run resources", {
         runId,
-        email: account.email,
+        email: account.email || "",
+        outlookLeaseDeferred: deferOutlookLease,
         phone: phoneLease.phone,
         paypalLocalPhone: phoneLease.paypal_local_phone,
       });
@@ -162,29 +182,66 @@ export class Worker {
         windowInfo: this.windowInfo,
         runId,
         workerId: this.id,
+        db: this.db,
       });
       updateRun(this.db, runId, { current_step: "workflow" });
       const result = await runWorkflow(context, { dryRun: this.dryRun, logger: this.logger });
 
       if (this.dryRun) {
         releasePaypalPhone(this.db, phoneLease.id, { runId, success: false, error: "dry_run_release" });
-        markOutlookFailure(this.db, account.id, {
-          retryable: true,
-          error: "dry_run_release",
-          maxAttempts: Number(this.config.runner?.maxAttemptsPerEmail || 5),
-        });
+        if (account.id) {
+          markOutlookFailure(this.db, account.id, {
+            retryable: true,
+            error: "dry_run_release",
+            maxAttempts: Number(this.config.runner?.maxAttemptsPerEmail || 5),
+          });
+        }
         finishRun(this.db, runId, { status: "skipped", error: "dry_run" });
         return { status: "skipped", runId, result };
       }
 
-      insertPlusAccount(this.db, account, result, this.config);
-      markOutlookPlusDone(this.db, account.id);
+      const finalAccount = context.account || account;
+      insertPlusAccount(this.db, finalAccount, result, this.config);
+      updateRun(this.db, runId, {
+        account_identifier_type: result.accountIdentifierType || "",
+        account_identifier: result.accountIdentifier || "",
+        cpa_upload_status: result.cpaUploadStatus || "",
+        callback_json_path: result.callbackJsonPath || "",
+      });
+      if (finalAccount.id) markOutlookPlusDone(this.db, finalAccount.id);
       releasePaypalPhone(this.db, phoneLease.id, { runId, success: true });
       finishRun(this.db, runId, { status: "done" });
+      appendRunEvent(this.db, {
+        runId,
+        workerId: this.id,
+        roxyDirId: this.windowInfo?.dirId || "",
+        accountEmail: finalAccount.email || "",
+        eventType: "run_done",
+        message: "run completed",
+        payload: {
+          cpaUploadStatus: result.cpaUploadStatus || "",
+          callbackJsonPath: result.callbackJsonPath || "",
+        },
+      });
       if (this.windowInfo) this.windowInfo.accountRuns += 1;
       return { status: "done", runId, result };
     } catch (error) {
       const retryable = error instanceof WorkflowNotImplementedError ? true : error.retryable !== false;
+      if (context?.signupPhoneActivation?.provider === "hero-sms") {
+        try {
+          await cancelOpenAiPhoneActivation(context.signupPhoneActivation, this.config);
+          this.logger.info("cancelled openai phone activation after failure", {
+            runId,
+            provider: context.signupPhoneActivation.provider,
+          });
+        } catch (cancelError) {
+          this.logger.warn("openai phone activation cancel failed", {
+            runId,
+            provider: context.signupPhoneActivation.provider,
+            error: cancelError.message,
+          });
+        }
+      }
       try {
         const artifactContext = context || {
           runId,
@@ -206,16 +263,41 @@ export class Worker {
       if (phoneLease) {
         releasePaypalPhone(this.db, phoneLease.id, { runId, success: false, error: error.message });
       }
-      markOutlookFailure(this.db, account.id, {
-        retryable,
-        error: error.message,
-        maxAttempts: Number(this.config.runner?.maxAttemptsPerEmail || 5),
-      });
+      const finalAccount = context?.account || account;
+      if (finalAccount?.id) {
+        const released = releaseDeferredOutlookOnFailure(context, (id, options) => {
+          releaseOutlookEmail(this.db, id, {
+            error: options.error || "",
+            decrementAttempt: true,
+          });
+        }, { error: error.message });
+        if (!released) {
+          const retryOutlook = retryable && !(deferOutlookLease && context?.boundEmailSubmitted === true);
+          markOutlookFailure(this.db, finalAccount.id, {
+            retryable: retryOutlook,
+            error: error.message,
+            maxAttempts: Number(this.config.runner?.maxAttemptsPerEmail || 5),
+          });
+        }
+      }
       finishRun(this.db, runId, { status: "failed", error: error.message });
+      appendRunEvent(this.db, {
+        runId,
+        workerId: this.id,
+        roxyDirId: this.windowInfo?.dirId || "",
+        accountEmail: finalAccount?.email || "",
+        level: "error",
+        eventType: "run_failed",
+        message: error.message,
+        payload: {
+          step: error.step || context?.currentStep || "unknown",
+          retryable,
+        },
+      });
       if (this.windowInfo) this.windowInfo.accountRuns += 1;
       await this.maybeRotateWindowProxyAfterFailure(error);
       error.runId = error.runId || runId;
-      error.email = error.email || account.email;
+      error.email = error.email || finalAccount?.email || "";
       error.retryable = retryable;
       throw error;
     }

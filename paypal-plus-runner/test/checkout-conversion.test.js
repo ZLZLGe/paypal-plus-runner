@@ -17,12 +17,17 @@ assert.equal(DEFAULT_CONFIG.checkoutConversion.openUrlPreference, "hosted");
 assert.equal(DEFAULT_CONFIG.checkoutConversion.requireStripeHostedUrl, true);
 assert.equal(config.checkoutConversion.country, "US");
 assert.equal(config.checkoutConversion.currency, "USD");
+assert.equal(DEFAULT_CONFIG.roxy.requireExitCountry, "JP");
+assert.equal(DEFAULT_CONFIG.checkoutProfile.fallbackAddress.countryCode, "JP");
 
 const payload = buildCheckoutPayload();
 assert.equal(payload.checkout_ui_mode, "hosted");
 assert.deepEqual(payload.billing_details, { country: "US", currency: "USD" });
 assert.equal(payload.promo_campaign.promo_campaign_id, "plus-1-month-free");
 assert.equal(payload.promo_campaign.is_coupon_from_query_param, false);
+
+const defaultConfigPayload = buildCheckoutPayload(DEFAULT_CONFIG.checkoutConversion);
+assert.deepEqual(defaultConfigPayload.billing_details, { country: "US", currency: "USD" });
 
 const overridePayload = buildCheckoutPayload({
   country: "us",

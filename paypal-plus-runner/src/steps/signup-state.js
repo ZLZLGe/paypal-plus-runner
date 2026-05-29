@@ -6,9 +6,9 @@ export async function detectLoggedInChatgpt(page) {
     const host = location.hostname;
     const isChatgpt = /chatgpt\.com|chat\.openai\.com/i.test(host);
     const hasComposer = Boolean(document.querySelector("textarea, [contenteditable='true'], form textarea, main form"));
-    const loggedInText = /new chat|search chats|where should we begin|what are you working on|ask anything|projects|library|you're all set/i.test(text);
-    const hasLoggedInShell = /new chat|search chats/i.test(text)
-      && /chat history|projects|library|apps|codex/i.test(text);
+    const loggedInText = /new chat|search chats|where should we begin|what are you working on|ask anything|projects|library|you're all set|新しいチャット|チャットを検索|どんなことをしてますか|プロジェクト|ライブラリ/i.test(text);
+    const hasLoggedInShell = /new chat|search chats|新しいチャット|チャットを検索/i.test(text)
+      && /chat history|projects|library|apps|codex|チャット履歴|プロジェクト|ライブラリ|アプリ/i.test(text);
     const authPage = /\/auth|\/log-in|\/create-account|email-verification/i.test(url);
     return {
       loggedIn: isChatgpt && (hasComposer || loggedInText || hasLoggedInShell) && !authPage,

@@ -256,11 +256,14 @@ async function runOpenAiHostedCheckout(page, context, { logger } = {}) {
   const result = await runPlusCheckoutMessage(page, context, {
     type: "RUN_HOSTED_OPENAI_CHECKOUT_STEP",
     payload: {
+      email: context.pluginGuestProfile?.email || "",
       address: context.checkoutProfile?.address || {},
     },
   });
   logger?.info?.("hosted OpenAI checkout submit attempted", {
     clicked: Boolean(result?.clicked),
+    contactEmail: result?.contactEmail || context.pluginGuestProfile?.email || "",
+    emailFilled: Boolean(result?.emailFillResult?.filled),
     hostedVerificationVisible: Boolean(result?.hostedVerificationVisible || result?.verificationPopupVisible),
     buttonText: result?.buttonText || "",
   });

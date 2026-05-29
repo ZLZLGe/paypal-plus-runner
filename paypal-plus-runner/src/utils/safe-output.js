@@ -4,21 +4,27 @@ const SENSITIVE_KEY_NORMALIZED = new Set([
   "authorization",
   "authorizationbearer",
   "clientsecret",
+  "code",
   "cookie",
   "cookies",
   "html",
+  "herosmsapikey",
+  "localhosturl",
   "mail",
   "password",
   "raw",
   "rawsession",
+  "redirecturl",
   "refreshtoken",
   "session",
   "sessionjson",
   "sessiontoken",
+  "state",
   "text",
 ]);
 
-const SENSITIVE_KEY_PATTERN = /(?:access|id|refresh|session)[_-]?token|session[_-]?json|client[_-]?secret|checkout[_-]?session[_-]?id|checkout[_-]?url|hosted[_-]?checkout[_-]?url|preferred[_-]?checkout[_-]?url|chatgpt[_-]?checkout[_-]?url|publishable[_-]?key/i;
+const SENSITIVE_KEY_PATTERN = /(?:access|id|refresh|session)[_-]?token|session[_-]?json|client[_-]?secret|authorization[_-]?bearer|api[_-]?key|hero[_-]?sms[_-]?api[_-]?key|callback[_-]?json|checkout[_-]?session[_-]?id|checkout[_-]?url|hosted[_-]?checkout[_-]?url|preferred[_-]?checkout[_-]?url|chatgpt[_-]?checkout[_-]?url|publishable[_-]?key/i;
+const URL_WITH_SECRET_KEY_PATTERN = /callback[_-]?url|localhost[_-]?url|redirect[_-]?url/i;
 
 function normalizeKey(key) {
   return String(key || "").replace(/[^a-z0-9]/gi, "").toLowerCase();
@@ -27,6 +33,10 @@ function normalizeKey(key) {
 function isSensitiveKey(key) {
   const normalized = normalizeKey(key);
   return SENSITIVE_KEY_NORMALIZED.has(normalized) || SENSITIVE_KEY_PATTERN.test(String(key || ""));
+}
+
+function isUrlWithSecretKey(key) {
+  return URL_WITH_SECRET_KEY_PATTERN.test(String(key || ""));
 }
 
 function redactUrlSecrets(value) {
@@ -50,12 +60,13 @@ export function redactStringForOutput(value) {
 export function redactForCliOutput(value, { seen = new WeakSet(), parentKey = "" } = {}) {
   if (value === null || value === undefined) return value;
   if (typeof value === "string") {
+    if (isUrlWithSecretKey(parentKey)) return redactStringForOutput(value);
     if (isSensitiveKey(parentKey)) return REDACTED;
     const redacted = redactStringForOutput(value);
     return redacted.length > 1200 ? `${redacted.slice(0, 1200)}...[TRUNCATED]` : redacted;
   }
   if (typeof value !== "object") return value;
-  if (isSensitiveKey(parentKey)) return REDACTED;
+  if (isSensitiveKey(parentKey) && !isUrlWithSecretKey(parentKey)) return REDACTED;
   if (seen.has(value)) return "[CIRCULAR]";
   seen.add(value);
 
@@ -65,7 +76,7 @@ export function redactForCliOutput(value, { seen = new WeakSet(), parentKey = ""
 
   const output = {};
   for (const [key, item] of Object.entries(value)) {
-    output[key] = isSensitiveKey(key)
+    output[key] = isSensitiveKey(key) && !isUrlWithSecretKey(key)
       ? REDACTED
       : redactForCliOutput(item, { seen, parentKey: key });
   }

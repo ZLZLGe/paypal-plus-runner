@@ -5,9 +5,13 @@ export function getDatabaseStats(db) {
     outlookEmails: all("SELECT status, COUNT(1) AS count FROM outlook_emails GROUP BY status ORDER BY status"),
     paypalPhones: all("SELECT status, COUNT(1) AS count, SUM(used_count) AS usedCount FROM paypal_phone_pool GROUP BY status ORDER BY status"),
     plusAccounts: one("SELECT COUNT(1) AS count FROM plus_accounts").count,
+    openaiPhoneActivations: all("SELECT status, COUNT(1) AS count FROM openai_phone_activations GROUP BY status ORDER BY status"),
     runHistory: all("SELECT status, COUNT(1) AS count FROM run_history GROUP BY status ORDER BY status"),
+    runEvents: one("SELECT COUNT(1) AS count FROM run_events").count,
     recentRuns: all(`
-      SELECT run_id, email, worker_id, status, current_step, roxy_dir_id, roxy_exit_ip, artifact_dir, error, updated_at
+      SELECT run_id, email, worker_id, status, current_step, roxy_dir_id, roxy_exit_ip,
+             account_identifier_type, account_identifier, cpa_upload_status, callback_json_path,
+             artifact_dir, error, updated_at
       FROM run_history
       ORDER BY id DESC
       LIMIT 10

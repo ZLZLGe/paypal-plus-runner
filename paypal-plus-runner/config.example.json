@@ -3,7 +3,7 @@
     "path": "data/paypal_plus_runner.db"
   },
   "runner": {
-    "gptPassword": "myPASSword!",
+    "gptPassword": "myPASSword!2026",
     "maxAttemptsPerEmail": 5,
     "skipSignupSteps": false,
     "skipOpenChatgpt": false,
@@ -28,7 +28,9 @@
     "plusPaymentMethod": "paypal",
     "accountAccessStrategyUi": "session_json",
     "sessionJsonTarget": "sub2api",
-    "plusAccountAccessStrategy": "sub2api_codex_session"
+    "plusAccountAccessStrategy": "sub2api_codex_session",
+    "signupMethod": "email",
+    "smsOauthOutputTarget": "cpa_upload"
   },
   "checkoutConversion": {
     "enabled": true,
@@ -95,8 +97,8 @@
     "createIntervalMs": 0,
     "cdpConnectTimeoutMs": 45000,
     "probeExitIp": true,
-    "requiredRegion": "US",
-    "requireExitCountry": "US",
+    "requiredRegion": "JP",
+    "requireExitCountry": "JP",
     "ipProbeUrl": "https://api.ipify.org?format=json",
     "ipProbeTimeoutMs": 20000,
     "localProxyResolveAttempts": 10,
@@ -112,11 +114,11 @@
     "closeWindowsOnExit": true,
     "deleteWindowsOnExit": false,
     "proxy": {
-      "host": "us.cliproxy.io",
+      "host": "sg.cliproxy.io",
       "port": "3010",
       "password": "",
       "check_channel": "IPRust.io",
-      "username_template": "username-region-US-asn-{ASN}-sid-{SID}-t-20",
+      "username_template": "username-region-JP-asn-{ASN}-sid-{SID}-t-20",
       "asn_pools": {
         "US": ["AS7922", "AS20057", "AS20115", "AS22773", "AS7018", "AS21928", "AS6167", "AS5650"],
         "JP": ["AS9605", "AS17676", "AS2516", "AS138384", "AS4713", "AS2518", "AS2527", "AS17511"]
@@ -139,19 +141,19 @@
     "mode": "plugin-compatible",
     "addressProvider": "meiguodizhi",
     "addressEndpoint": "https://www.meiguodizhi.com/api/v1/dz",
-    "hostedAddressPath": "/",
-    "hostedAddressMethod": "address",
+    "hostedAddressPath": "/jp-address",
+    "hostedAddressMethod": "refresh",
     "firstName": "James",
     "lastName": "Smith",
     "guestEmailDomain": "gmail.com",
     "cardMode": "generated-visa-luhn",
     "storeCardInDb": false,
     "fallbackAddress": {
-      "street": "123 Main St",
-      "city": "New York",
-      "state": "New York",
-      "zip": "10001",
-      "countryCode": "US"
+      "street": "1-1-2 Otemachi",
+      "city": "Chiyoda-ku",
+      "state": "Tokyo",
+      "zip": "1000004",
+      "countryCode": "JP"
     },
     "billingAddress": {
       "preferSameAsHostedAddress": true,
@@ -182,10 +184,44 @@
   "cpa": {
     "baseUrl": "",
     "authorizationBearer": "",
+    "timeoutMs": 30000,
+    "uploadLockTimeoutMs": 900000,
+    "workerAccountOauthTimeoutMs": 600000,
+    "multiStateSupported": true,
     "localJsonEnabled": true,
     "localJsonDir": "cpa-json",
     "pluginDir": "",
     "relativeAuthDir": ".cli-proxy-api"
+  },
+  "openaiPhone": {
+    "enabled": false,
+    "provider": "",
+    "file": "",
+    "manualPhone": "",
+    "manualSmsUrl": "",
+    "heroSmsApiKey": "",
+    "heroSmsBaseUrl": "https://hero-sms.com/stubs/handler_api.php",
+    "heroSmsCountryId": 16,
+    "heroSmsCountryLabel": "United Kingdom",
+    "heroSmsCountryPool": "16:United Kingdom,151:Chile,73:Brazil,33:Colombia",
+    "heroSmsServiceCode": "dr",
+    "heroSmsMinPrice": "",
+    "heroSmsMaxPrice": "0.07",
+    "heroSmsReuseFile": "data/openai-phone-activation.json",
+    "heroSmsReusePhoneNumber": "",
+    "initialSmsDelayMs": 10000,
+    "pollIntervalMs": 3000,
+    "pollTimeoutMs": 180000,
+    "requestTimeoutMs": 15000
+  },
+  "callbackJson": {
+    "enabled": true,
+    "dir": "callback-json",
+    "mode": "cpa_upload_summary"
+  },
+  "ui": {
+    "host": "127.0.0.1",
+    "port": 8787
   },
   "output": {
     "dir": "output"

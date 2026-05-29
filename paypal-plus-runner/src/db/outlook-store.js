@@ -94,6 +94,20 @@ export function markOutlookRunning(db, id) {
   db.prepare("UPDATE outlook_emails SET status = 'running', updated_at = ? WHERE id = ?").run(utcNow(), id);
 }
 
+export function releaseOutlookEmail(db, id, { error = "", decrementAttempt = true } = {}) {
+  const row = db.prepare("SELECT attempt_count FROM outlook_emails WHERE id = ?").get(id);
+  const attempts = Math.max(0, Number(row?.attempt_count || 0) - (decrementAttempt ? 1 : 0));
+  db.prepare(`
+    UPDATE outlook_emails
+    SET status = 'new',
+        attempt_count = ?,
+        leased_at = '',
+        last_error = ?,
+        updated_at = ?
+    WHERE id = ?
+  `).run(attempts, String(error || "").slice(0, 1000), utcNow(), id);
+}
+
 export function markOutlookPlusDone(db, id) {
   db.prepare("UPDATE outlook_emails SET status = 'plus_done', last_error = '', updated_at = ? WHERE id = ?").run(utcNow(), id);
 }

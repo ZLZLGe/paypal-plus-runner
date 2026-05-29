@@ -11,6 +11,7 @@ import { runRunner } from "./runner.js";
 import { probeLocalJpCheckoutProxy } from "./checkout-conversion/probe-local-jp.js";
 import { probeRoxy } from "./roxy/probe.js";
 import { stringifySafeJson } from "./utils/safe-output.js";
+import { startUiServer } from "./ui/server.js";
 
 function commandFromArgv(argv) {
   if (argv[0] && !argv[0].startsWith("--")) {
@@ -88,6 +89,11 @@ async function main() {
   if (command === "start") {
     const result = await runRunner(config, args);
     console.log(stringifySafeJson(result));
+    return;
+  }
+
+  if (command === "ui") {
+    await startUiServer(config);
     return;
   }
 
