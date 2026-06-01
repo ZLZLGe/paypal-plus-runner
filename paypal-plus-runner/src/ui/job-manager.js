@@ -32,13 +32,15 @@ export class UiJobManager {
     this.tasks = new Map();
   }
 
-  start({ mode = "full", limit = 1, windows = 1, ids = [], forceNewPhone = false } = {}) {
+  start({ mode = "full", limit = 1, windows = 1, ids = [], forceNewPhone = false, headless = true } = {}) {
     const resolvedMode = normalizePaypalPlusProcess(mode);
     const taskId = makeTaskId();
     const args = [CLI_PATH, "plus", "--mode", resolvedMode];
     const configPath = String(this.config.__configPath || "").trim();
     if (configPath) args.push("--config", configPath);
     if (this.config.database?.path) args.push("--db", String(this.config.database.path));
+    const resolvedHeadless = headless !== false;
+    args.push(resolvedHeadless ? "--headless" : "--headed");
     if (Number(limit) > 0) args.push("--limit", String(Math.max(1, Number.parseInt(String(limit), 10) || 1)));
     if (Number(windows) > 0) args.push("--windows", String(Math.max(1, Number.parseInt(String(windows), 10) || 1)));
     const shouldForceNewPhone = resolvedMode === PAYPAL_PLUS_PROCESS.REGISTER_LINK && forceNewPhone === true;
@@ -59,6 +61,7 @@ export class UiJobManager {
       taskId,
       mode: resolvedMode,
       forceNewPhone: shouldForceNewPhone,
+      headless: resolvedHeadless,
       status: "running",
       pid: 0,
       command: [process.execPath, ...args].join(" "),

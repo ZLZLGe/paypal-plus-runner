@@ -34,6 +34,9 @@ function makeSpawnRecorder() {
   const task = manager.start({ mode: "pay-link", ids: [7, 8], limit: 2, windows: 1 });
   assert.equal(task.mode, "pay-link");
   assert.deepEqual(recorder.calls[0].args.slice(1, 4), ["plus", "--mode", "pay-link"]);
+  assert.equal(task.headless, true);
+  assert.deepEqual(recorder.calls[0].args.includes("--headless"), true);
+  assert.deepEqual(recorder.calls[0].args.includes("--headed"), false);
   assert.deepEqual(recorder.calls[0].args.includes("--checkout-link-ids"), true);
   assert.deepEqual(recorder.calls[0].args.includes("--gpt-phone-account-ids"), false);
   assert.equal(recorder.calls[0].args[recorder.calls[0].args.indexOf("--checkout-link-ids") + 1], "7,8");
@@ -55,6 +58,7 @@ function makeSpawnRecorder() {
   });
   const task = manager.start({ mode: "register-link", ids: [12], limit: 1, windows: 1 });
   assert.equal(task.mode, "register-link");
+  assert.equal(task.headless, true);
   assert.deepEqual(recorder.calls[0].args.includes("--gpt-phone-account-ids"), true);
   assert.deepEqual(recorder.calls[0].args.includes("--checkout-link-ids"), false);
   assert.equal(recorder.calls[0].args[recorder.calls[0].args.indexOf("--gpt-phone-account-ids") + 1], "12");
@@ -73,6 +77,20 @@ function makeSpawnRecorder() {
   assert.deepEqual(recorder.calls[0].args.includes("--new-phone"), true);
   assert.deepEqual(recorder.calls[0].args.includes("--gpt-phone-account-ids"), false);
   assert.deepEqual(recorder.calls[0].args.includes("--checkout-link-ids"), false);
+}
+
+{
+  const recorder = makeSpawnRecorder();
+  const manager = new UiJobManager({
+    config: { database: { path: "/tmp/paypal.db" } },
+    cwd: "/tmp/project",
+    spawnFn: recorder.spawnFn,
+  });
+  const task = manager.start({ mode: "register-link", limit: 1, windows: 1, headless: false });
+  assert.equal(task.mode, "register-link");
+  assert.equal(task.headless, false);
+  assert.deepEqual(recorder.calls[0].args.includes("--headed"), true);
+  assert.deepEqual(recorder.calls[0].args.includes("--headless"), false);
 }
 
 console.log("ui-job-manager tests passed");

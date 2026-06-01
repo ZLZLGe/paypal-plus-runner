@@ -66,6 +66,7 @@ const fakeJobManager = {
       limit: options.limit,
       windows: options.windows,
       forceNewPhone: options.forceNewPhone,
+      headless: options.headless,
       status: "running",
       runIds: [],
     };
@@ -139,7 +140,7 @@ try {
   const taskResponse = await fetch(`${baseUrl}/api/plus/tasks`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ mode: "pay-link", ids: [checkoutLink.id], limit: 1, windows: 1 }),
+    body: JSON.stringify({ mode: "pay-link", ids: [checkoutLink.id], limit: 1, windows: 1, headless: false }),
   });
   assert.equal(taskResponse.status, 201);
   const taskJson = await taskResponse.json();
@@ -147,6 +148,7 @@ try {
   assert.equal(taskJson.task.mode, "pay-link");
   assert.deepEqual(taskJson.task.ids, [checkoutLink.id]);
   assert.equal(taskJson.task.forceNewPhone, false);
+  assert.equal(taskJson.task.headless, false);
 
   const newPhoneTaskResponse = await fetch(`${baseUrl}/api/plus/tasks`, {
     method: "POST",
@@ -159,6 +161,7 @@ try {
   assert.equal(newPhoneTaskJson.task.mode, "register-link");
   assert.deepEqual(newPhoneTaskJson.task.ids, []);
   assert.equal(newPhoneTaskJson.task.forceNewPhone, true);
+  assert.equal(newPhoneTaskJson.task.headless, true);
 
   const taskDetailResponse = await fetch(`${baseUrl}/api/plus/tasks/task_test`);
   assert.equal(taskDetailResponse.ok, true);

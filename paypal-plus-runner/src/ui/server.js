@@ -227,6 +227,7 @@ export function createUiServer(config, { jobManager = null } = {}) {
               limit: body.limit || 1,
               windows: body.windows || 1,
               forceNewPhone,
+              headless: body.headless === undefined ? config.roxy?.headless !== false : parseBoolean(body.headless),
             });
             return sendJson(res, { ok: true, task }, 201);
           }

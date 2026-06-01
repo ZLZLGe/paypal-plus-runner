@@ -89,6 +89,16 @@ input {
   width: 128px;
 }
 
+.toolbar-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 4px;
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
 .content {
   padding: 18px 22px 26px;
 }

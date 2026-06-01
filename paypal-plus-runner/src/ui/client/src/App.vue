@@ -94,6 +94,7 @@ const selectedCpaAccountIds = ref([]);
 const selectedCheckoutLinkIds = ref([]);
 const limit = ref(1);
 const windows = ref(1);
+const headlessMode = ref(true);
 const summary = ref({});
 const accounts = ref([]);
 const registerAccounts = ref([]);
@@ -332,6 +333,7 @@ async function startMode(mode, options = {}) {
       limit: Number(limit.value || 1),
       windows: Number(windows.value || 1),
       forceNewPhone,
+      headless: headlessMode.value === true,
     };
     const result = await postJson("/api/plus/tasks", payload);
     selectedTask.value = result.task;
@@ -414,6 +416,10 @@ onUnmounted(() => {
           <n-input-number v-model:value="windows" :min="1" :max="10" size="small">
             <template #prefix>windows</template>
           </n-input-number>
+          <div class="toolbar-switch">
+            <span>无头模式</span>
+            <n-switch v-model:value="headlessMode" size="small" />
+          </div>
           <n-button secondary :loading="loading" @click="refreshAll()">
             <template #icon>
               <n-icon><RefreshCw /></n-icon>
@@ -652,6 +658,7 @@ onUnmounted(() => {
                   <n-tag round type="info">选中链接 {{ selectedCheckoutLinkIds.length }}</n-tag>
                   <n-tag round>limit {{ limit }}</n-tag>
                   <n-tag round>windows {{ windows }}</n-tag>
+                  <n-tag round>{{ headlessMode ? "headless" : "headed" }}</n-tag>
                 </n-space>
               </n-card>
 
@@ -680,6 +687,7 @@ onUnmounted(() => {
               <n-descriptions-item label="Task ID">{{ selectedTask.taskId }}</n-descriptions-item>
               <n-descriptions-item label="Mode">{{ selectedTask.mode }}</n-descriptions-item>
               <n-descriptions-item label="新手机号">{{ selectedTask.forceNewPhone ? "yes" : "no" }}</n-descriptions-item>
+              <n-descriptions-item label="无头模式">{{ selectedTask.headless ? "yes" : "no" }}</n-descriptions-item>
               <n-descriptions-item label="Status">{{ selectedTask.status }}</n-descriptions-item>
               <n-descriptions-item label="PID">{{ selectedTask.pid || "-" }}</n-descriptions-item>
               <n-descriptions-item label="Run IDs">{{ (selectedTask.runIds || []).join(", ") || "-" }}</n-descriptions-item>
