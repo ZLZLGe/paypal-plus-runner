@@ -150,6 +150,25 @@ try {
   assert.equal(taskJson.task.forceNewPhone, false);
   assert.equal(taskJson.task.headless, false);
 
+  const initialSettingsResponse = await fetch(`${baseUrl}/api/plus/settings`);
+  assert.equal(initialSettingsResponse.ok, true);
+  const initialSettingsJson = await initialSettingsResponse.json();
+  assert.equal(initialSettingsJson.settings.headless, true);
+
+  const saveSettingsResponse = await fetch(`${baseUrl}/api/plus/settings`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ headless: false }),
+  });
+  assert.equal(saveSettingsResponse.ok, true);
+  const saveSettingsJson = await saveSettingsResponse.json();
+  assert.equal(saveSettingsJson.settings.headless, false);
+
+  const savedSettingsResponse = await fetch(`${baseUrl}/api/plus/settings`);
+  assert.equal(savedSettingsResponse.ok, true);
+  const savedSettingsJson = await savedSettingsResponse.json();
+  assert.equal(savedSettingsJson.settings.headless, false);
+
   const newPhoneTaskResponse = await fetch(`${baseUrl}/api/plus/tasks`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -161,7 +180,7 @@ try {
   assert.equal(newPhoneTaskJson.task.mode, "register-link");
   assert.deepEqual(newPhoneTaskJson.task.ids, []);
   assert.equal(newPhoneTaskJson.task.forceNewPhone, true);
-  assert.equal(newPhoneTaskJson.task.headless, true);
+  assert.equal(newPhoneTaskJson.task.headless, false);
 
   const taskDetailResponse = await fetch(`${baseUrl}/api/plus/tasks/task_test`);
   assert.equal(taskDetailResponse.ok, true);

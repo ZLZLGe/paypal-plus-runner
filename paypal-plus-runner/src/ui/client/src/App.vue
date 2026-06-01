@@ -1,5 +1,5 @@
 <script setup>
-import { computed, h, onMounted, onUnmounted, ref } from "vue";
+import { computed, h, onMounted, onUnmounted, ref, watch } from "vue";
 import {
   NButton,
   NCode,
@@ -94,7 +94,9 @@ const selectedCpaAccountIds = ref([]);
 const selectedCheckoutLinkIds = ref([]);
 const limit = ref(1);
 const windows = ref(1);
-const headlessMode = ref(true);
+const headlessMode = ref(false);
+const settingsLoaded = ref(false);
+let applyingRemoteSettings = false;
 const summary = ref({});
 const accounts = ref([]);
 const registerAccounts = ref([]);
@@ -168,6 +170,22 @@ async function postJson(url, body = {}) {
     throw new Error(payload.error || `${url} failed: ${response.status}`);
   }
   return payload;
+}
+
+async function refreshSettings() {
+  const result = await getJson("/api/plus/settings");
+  applyingRemoteSettings = true;
+  headlessMode.value = result.settings?.headless === true;
+  settingsLoaded.value = true;
+  applyingRemoteSettings = false;
+}
+
+async function saveSettings({ force = false } = {}) {
+  if ((!settingsLoaded.value && !force) || applyingRemoteSettings) return;
+  await postJson("/api/plus/settings", {
+    headless: headlessMode.value === true,
+  });
+  settingsLoaded.value = true;
 }
 
 function countRows(rows = []) {
@@ -327,6 +345,7 @@ async function startMode(mode, options = {}) {
   starting.value = startKey;
   lastError.value = "";
   try {
+    await saveSettings({ force: true });
     const payload = {
       mode,
       ids: forceNewPhone ? [] : selectedIdsForMode(mode),
@@ -389,8 +408,18 @@ function rowClassName(row) {
 }
 
 onMounted(() => {
+  refreshSettings().catch((error) => {
+    lastError.value = error.message;
+    settingsLoaded.value = true;
+  });
   refreshAll();
   refreshTimer = setInterval(() => refreshAll({ silent: true }), 3500);
+});
+
+watch(headlessMode, () => {
+  saveSettings().catch((error) => {
+    lastError.value = error.message;
+  });
 });
 
 onUnmounted(() => {

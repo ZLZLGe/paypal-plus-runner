@@ -258,6 +258,12 @@ export function initSchema(db) {
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
 
+    CREATE TABLE IF NOT EXISTS ui_settings (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL DEFAULT '',
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+
     CREATE INDEX IF NOT EXISTS idx_outlook_status ON outlook_emails(status, id);
     CREATE INDEX IF NOT EXISTS idx_phone_status ON paypal_phone_pool(status, used_count, updated_at);
     CREATE INDEX IF NOT EXISTS idx_paypal_phone_sms_codes_phone_seen ON paypal_phone_sms_codes(phone, last_seen_at);

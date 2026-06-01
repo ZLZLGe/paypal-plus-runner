@@ -7,6 +7,7 @@ import { initSchema } from "../db/schema.js";
 import { getDatabaseStats } from "../db/stats.js";
 import { listRunEvents } from "../db/run-event-store.js";
 import { listCheckoutLinks } from "../db/checkout-link-store.js";
+import { getUiSettings, saveUiSettings } from "../db/ui-settings-store.js";
 import { redactForCliOutput, redactStringForOutput } from "../utils/safe-output.js";
 import { UiJobManager } from "./job-manager.js";
 
@@ -217,17 +218,31 @@ export function createUiServer(config, { jobManager = null } = {}) {
             }).map(maskCheckoutLink),
           });
         }
+        if (parsed.pathname === "/api/plus/settings") {
+          if (req.method === "POST") {
+            const body = await readJsonBody(req);
+            return sendJson(res, {
+              ok: true,
+              settings: saveUiSettings(db, body, config),
+            });
+          }
+          return sendJson(res, {
+            ok: true,
+            settings: getUiSettings(db, config),
+          });
+        }
         if (parsed.pathname === "/api/plus/tasks") {
           if (req.method === "POST") {
             const body = await readJsonBody(req);
             const forceNewPhone = parseBoolean(body.forceNewPhone);
+            const settings = getUiSettings(db, config);
             const task = tasks.start({
               mode: body.mode || body.process || "full",
               ids: forceNewPhone ? [] : body.ids || [],
               limit: body.limit || 1,
               windows: body.windows || 1,
               forceNewPhone,
-              headless: body.headless === undefined ? config.roxy?.headless !== false : parseBoolean(body.headless),
+              headless: body.headless === undefined ? settings.headless : parseBoolean(body.headless),
             });
             return sendJson(res, { ok: true, task }, 201);
           }
