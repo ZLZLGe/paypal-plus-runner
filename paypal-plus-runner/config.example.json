@@ -13,8 +13,13 @@
     "openChatgptNavigationRetryDelayMs": 1500,
     "checkoutTransitionTimeoutMs": 180000,
     "paypalHostedTimeoutMs": 900000,
-    "paypalHostedStuckRefreshMs": 90000,
+    "paypalHostedStuckRefreshMs": 50000,
     "paypalVerificationMaxAttempts": 3,
+    "paypalVerificationDebug": false,
+    "paypalVerificationDebugLogIntervalMs": 5000,
+    "paypalVerificationDebugSnapshotStateChanges": true,
+    "paypalVerificationDebugHtml": true,
+    "paypalVerificationDebugScreenshot": true,
     "cleanupBrowserDataBeforeEachAccount": true,
     "screenshotOnFailure": true,
     "htmlSnapshotOnFailure": true,
@@ -83,6 +88,15 @@
       "gostPortRetryAttempts": 5
     }
   },
+  "paypalRiskRetry": {
+    "enabled": true,
+    "mode": "retry",
+    "maxAttempts": 3,
+    "rotateRoxy": true,
+    "newWindow": true,
+    "recreateCheckout": true,
+    "cooldownMs": 5000
+  },
   "roxy": {
     "api_base": "http://127.0.0.1:50000",
     "token": "",
@@ -132,19 +146,19 @@
   "paypalPhone": {
     "leaseMinutes": 30,
     "maxUse": 5,
+    "countryCodes": ["JP"],
     "initialSmsDelayMs": 10000,
     "pollIntervalMs": 500,
     "pollTimeoutMs": 180000,
-    "fillLocalUsNumber": true
+    "fillLocalUsNumber": false
   },
   "checkoutProfile": {
     "mode": "plugin-compatible",
     "addressProvider": "meiguodizhi",
     "addressEndpoint": "https://www.meiguodizhi.com/api/v1/dz",
+    "hostedAddressCountryCode": "JP",
     "hostedAddressPath": "/jp-address",
     "hostedAddressMethod": "refresh",
-    "firstName": "James",
-    "lastName": "Smith",
     "guestEmailDomain": "gmail.com",
     "cardMode": "generated-visa-luhn",
     "storeCardInDb": false,
@@ -173,7 +187,8 @@
     "paypalSmsInitialDelayMs": 10000,
     "paypalSmsPollIntervalMs": 3000,
     "paypalSmsMaxAttempts": 60,
-    "paypalSmsRequestTimeoutMs": 15000
+    "paypalSmsRequestTimeoutMs": 15000,
+    "paypalSmsSeenTtlHours": 24
   },
   "sub2api": {
     "baseUrl": "",
@@ -209,9 +224,12 @@
     "heroSmsMaxPrice": "0.07",
     "heroSmsReuseFile": "data/openai-phone-activation.json",
     "heroSmsReusePhoneNumber": "",
+    "heroSmsNumberRequestAttempts": 3,
+    "heroSmsNumberRequestRetryDelayMs": 10000,
     "initialSmsDelayMs": 10000,
     "pollIntervalMs": 3000,
     "pollTimeoutMs": 180000,
+    "signupPollTimeoutMs": 60000,
     "requestTimeoutMs": 15000
   },
   "callbackJson": {
