@@ -101,6 +101,7 @@ const cpaAccounts = ref([]);
 const checkoutLinks = ref([]);
 const tasks = ref([]);
 const runs = ref([]);
+const activeRuns = ref([]);
 const events = ref([]);
 let refreshTimer = null;
 
@@ -180,13 +181,12 @@ function countStatus(rows = [], status) {
 
 const metrics = computed(() => {
   const gptRows = summary.value.gptPhoneAccounts || [];
-  const runRows = summary.value.runHistory || [];
   return [
     { label: "注册账号", value: countStatus(gptRows, "registered"), status: "ready" },
     { label: "待支付链接", value: checkoutLinks.value.filter((item) => item.status === "ready").length, status: "ready" },
     { label: "Plus 成功", value: countStatus(gptRows, "plus_done") + countStatus(gptRows, "email_bound"), status: "paid" },
     { label: "CPA 完成", value: countStatus(gptRows, "cpa_done"), status: "cpa_done" },
-    { label: "运行中", value: countStatus(runRows, "running"), status: "running" },
+    { label: "运行中", value: activeRuns.value.length, status: "running" },
   ];
 });
 
@@ -296,6 +296,7 @@ async function refreshAll({ silent = false } = {}) {
       linksResult,
       tasksResult,
       runsResult,
+      activeRunsResult,
     ] = await Promise.all([
       getJson("/api/summary"),
       getJson("/api/plus/accounts?limit=300"),
@@ -304,6 +305,7 @@ async function refreshAll({ silent = false } = {}) {
       getJson("/api/plus/checkout-links?limit=300"),
       getJson("/api/plus/tasks"),
       getJson("/api/runs?limit=120"),
+      getJson("/api/runs?status=running&activeOnly=1&limit=120"),
     ]);
     summary.value = summaryResult;
     accounts.value = allAccounts.accounts || [];
@@ -312,6 +314,7 @@ async function refreshAll({ silent = false } = {}) {
     checkoutLinks.value = linksResult.links || [];
     tasks.value = tasksResult.tasks || [];
     runs.value = runsResult.runs || [];
+    activeRuns.value = activeRunsResult.runs || [];
     if (!selectedRunId.value && runs.value[0]) selectedRunId.value = runs.value[0].runId;
     if (selectedRunId.value) await refreshEvents(selectedRunId.value);
     lastUpdated.value = new Date().toISOString();
