@@ -211,30 +211,9 @@ const relevantRuns = computed(() => {
 });
 
 const taskColumns = [
-  { title: "任务", key: "taskId", minWidth: 190 },
-  { title: "模式", key: "mode", width: 130, render: (row) => renderStatus(row.mode) },
-  { title: "状态", key: "status", width: 110, render: (row) => renderStatus(row.status) },
-  { title: "Run IDs", key: "runIds", minWidth: 180, render: (row) => renderText((row.runIds || []).join(", ")) },
-  { title: "开始", key: "startedAt", width: 140, render: (row) => formatTime(row.startedAt) },
-  {
-    title: "操作",
-    key: "actions",
-    width: 170,
-    render: (row) => h("div", { class: "table-actions" }, [
-      h(NButton, {
-        size: "small",
-        secondary: true,
-        onClick: () => openTask(row),
-      }, { icon: icon(FileText), default: () => "详情" }),
-      row.status === "running" ? h(NButton, {
-        size: "small",
-        type: "error",
-        secondary: true,
-        loading: stoppingTaskId.value === row.taskId,
-        onClick: () => stopTask(row.taskId),
-      }, { icon: icon(Square), default: () => "停止" }) : null,
-    ]),
-  },
+  { title: "任务", key: "taskId", width: 150, ellipsis: { tooltip: true } },
+  { title: "模式", key: "mode", width: 96, ellipsis: { tooltip: true }, render: (row) => renderText(row.mode) },
+  { title: "状态", key: "status", width: 90, render: (row) => renderStatus(row.status) },
 ];
 
 const accountColumns = [
@@ -387,6 +366,13 @@ function openTask(task) {
     });
   }
   taskDrawerOpen.value = true;
+}
+
+function taskRowProps(row) {
+  return {
+    class: "task-row",
+    onClick: () => openTask(row),
+  };
 }
 
 function selectRun(runId) {
@@ -640,10 +626,12 @@ onUnmounted(() => {
                   <n-tag v-if="latestTask" round :type="statusInfo(latestTask.status).type">{{ latestTask.status }}</n-tag>
                 </template>
                 <n-data-table
+                  class="task-queue-table"
                   :columns="taskColumns"
                   :data="tasks"
                   :row-key="row => row.taskId"
-                  :scroll-x="930"
+                  :row-props="taskRowProps"
+                  :scroll-x="336"
                   size="small"
                   :pagination="{ pageSize: 6 }"
                 />

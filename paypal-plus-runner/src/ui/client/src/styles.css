@@ -213,6 +213,20 @@ input {
   white-space: nowrap;
 }
 
+.task-queue-table .task-row {
+  cursor: pointer;
+}
+
+.task-queue-table .n-data-table-th,
+.task-queue-table .n-data-table-td {
+  padding-left: 10px;
+  padding-right: 10px;
+}
+
+.task-queue-table .status-tag {
+  min-width: 68px;
+}
+
 .status-tag {
   min-width: 74px;
   justify-content: center;
