@@ -7,6 +7,7 @@ import {
   requestOpenAiPhoneAdditionalSms,
   resolveOpenAiPhoneActivation,
 } from "../providers/openai-phone.js";
+import { dismissChatgptPrivacyDialog } from "./chatgpt-privacy.js";
 import { detectLoggedInChatgpt } from "./signup-state.js";
 import { buildSignupProfilePayload } from "./signup-profile.js";
 import { WorkflowStepRetryError } from "../utils/errors.js";
@@ -362,7 +363,12 @@ async function settleExactPhoneEntryPage(page, { logger } = {}) {
   if (cookie.present && !cookie.closed) {
     throw new Error(`步骤 2：精确 cookie 对话框关闭失败。URL: ${page.url()} reason=${cookie.reason}`);
   }
-  return { clientReady, cookie };
+  const privacy = await dismissChatgptPrivacyDialog(page);
+  logger?.info?.("ChatGPT privacy dialog settle result", privacy);
+  if (privacy.present && !privacy.settled) {
+    throw new Error(`步骤 2：隐私弹窗关闭失败。URL: ${page.url()} reason=${privacy.reason}`);
+  }
+  return { clientReady, cookie, privacy };
 }
 
 async function openExactPhoneEntry(page) {
@@ -468,6 +474,22 @@ async function openExactPhoneEntryAndWaitForInput(page, { logger, attempts = 3, 
         reason: "cookie_dialog_blocking_phone_entry",
         attempt,
         cookie,
+        clickResult: lastClickResult,
+        inputReady: lastInputReady,
+      };
+    }
+    const privacy = await dismissChatgptPrivacyDialog(page, {
+      timeoutMs: attempt === 1 ? 3000 : 5000,
+      stableAbsentMs: 700,
+      pollMs: 200,
+    });
+    logger?.info?.("ChatGPT privacy dialog pre-click result", { attempt, ...privacy });
+    if (privacy.present && !privacy.settled) {
+      return {
+        ok: false,
+        reason: "privacy_dialog_blocking_phone_entry",
+        attempt,
+        privacy,
         clickResult: lastClickResult,
         inputReady: lastInputReady,
       };
@@ -1177,6 +1199,13 @@ async function loginWithSignupPhoneOnCurrentPage(context, { logger } = {}) {
     openAiPhoneResolveOptions(context, { allowNew: false }),
   );
   const phoneNumber = context.signupPhoneNumber || context.accountIdentifier || activation.phoneNumber;
+  const privacy = await dismissChatgptPrivacyDialog(context.page, {
+    timeoutMs: Number(context.config.runner?.chatgptPrivacyDialogTimeoutMs || 6000),
+  });
+  logger?.info?.("ChatGPT privacy dialog before phone login result", privacy);
+  if (privacy.present && !privacy.settled) {
+    throw new Error(`手机号登录前隐私弹窗关闭失败。URL: ${context.page.url()} reason=${privacy.reason}`);
+  }
   await injectSignupFlow(context.page, { pluginRoot: context.config.plugin?.root });
   let login = null;
   try {

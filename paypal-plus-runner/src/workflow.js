@@ -283,6 +283,7 @@ function getPayLinkSteps() {
   return [
     ["open-checkout-link", openCheckoutLongLinkStep],
     ["plus-checkout-billing", fillPlusCheckoutStep],
+    ["login-existing-phone", loginExistingPhoneStep],
     ["plus-checkout-return", plusReturnConfirmStep],
   ];
 }
@@ -328,6 +329,7 @@ function isPlusAccountReadyStep(stepName = "", result = {}, context = {}) {
   if (stepName !== "plus-checkout-return") return false;
   return result?.reason === "already_paid"
     || result?.reason === "chatgpt_plus_session_confirmed"
+    || result?.reason === "chatgpt_login_plus_session_confirmed"
     || result?.reason === "payments_success"
     || result?.reason === "stripe_paypal_redirect_plus_confirmed";
 }

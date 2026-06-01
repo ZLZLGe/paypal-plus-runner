@@ -10,7 +10,7 @@ import {
   waitForStageAcrossContext,
 } from "../src/steps/fill-plus-checkout.js";
 import { plusReturnConfirmStep } from "../src/steps/plus-return-confirm.js";
-import { isStripePaypalRedirectSucceededUrl, safeGotoWithRetry } from "../src/browser/page-utils.js";
+import { detectPageStage, isStripePaypalRedirectSucceededUrl, safeGotoWithRetry } from "../src/browser/page-utils.js";
 import { assertPlusSessionJson, extractSessionPlanType, isPlusSessionPlanType } from "../src/providers/session-json.js";
 
 function makeEvalPage({ url = "https://chatgpt.com/", html = "", session = null } = {}) {
@@ -139,6 +139,7 @@ assert.deepEqual(
 assert.equal(isStripePaypalRedirectSucceededUrl("https://checkout.stripe.com/c/pay/cs_live_123?redirect_pm_type=paypal&redirect_status=succeeded"), true);
 assert.equal(isStripePaypalRedirectSucceededUrl("https://checkout.stripe.com/c/pay/cs_live_123?redirect_pm_type=paypal&redirect_status=failed"), false);
 assert.equal(isStripePaypalRedirectSucceededUrl("https://pay.openai.com/c/pay/cs_live_123?redirect_pm_type=paypal&redirect_status=succeeded"), false);
+assert.equal((await detectPageStage(makeEvalPage({ url: "https://chatgpt.com/auth/login" }))).stage, "chatgpt_login");
 
 const stripeReturnContext = {
   page: makeEvalPage({ url: "https://checkout.stripe.com/c/pay/cs_live_123?redirect_pm_type=paypal&redirect_status=succeeded" }),
@@ -149,6 +150,15 @@ const stripeReturn = await fillPlusCheckoutStep(stripeReturnContext);
 assert.equal(stripeReturn.status, "done");
 assert.equal(stripeReturn.reason, "stripe_paypal_redirect_succeeded");
 assert.equal(stripeReturnContext.stripePaypalRedirectSucceeded, true);
+
+const chatgptLoginReturnContext = {
+  page: makeEvalPage({ url: "https://chatgpt.com/auth/login" }),
+  checkout: {},
+  config: { runner: { checkoutTransitionTimeoutMs: 1 } },
+};
+const chatgptLoginReturn = await fillPlusCheckoutStep(chatgptLoginReturnContext);
+assert.equal(chatgptLoginReturn.status, "done");
+assert.equal(chatgptLoginReturn.reason, "chatgpt_login_after_paypal");
 
 await assert.rejects(
   () => plusReturnConfirmStep({

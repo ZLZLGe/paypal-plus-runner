@@ -776,6 +776,27 @@ function useStagePage(context, currentPage, match, { logger, reason = "" } = {})
   return nextPage;
 }
 
+function isPostPaymentChatgptStage(stage = {}) {
+  return stage.stage === "chatgpt_login" || stage.stage === "chatgpt";
+}
+
+async function resolvePostPaymentChatgptStage(context, page, stage = {}, { logger } = {}) {
+  if (stage.stage === "chatgpt") {
+    const confirmed = await tryConfirmPlusSessionOnPage(page, context, stage, { logger });
+    if (confirmed) {
+      setCheckoutSubstep(context, "chatgpt-plus-session-confirmed");
+      return {
+        status: "done",
+        reason: "chatgpt_plus_session_confirmed",
+        stage: confirmed.stage,
+        verified: confirmed.verified,
+      };
+    }
+  }
+  setCheckoutSubstep(context, stage.stage === "chatgpt_login" ? "chatgpt-login-after-paypal" : "chatgpt-after-paypal");
+  return { status: "done", reason: `${stage.stage}_after_paypal`, stage };
+}
+
 function getCheckoutAmountRetryMax(context) {
   const configured = context.config.checkoutConversion?.zeroAmountRetryMax
     ?? context.config.runner?.zeroAmountRetryMax
@@ -991,10 +1012,11 @@ export async function fillPlusCheckoutStep(context, { logger } = {}) {
     item.stage === "paypal"
     || item.stage === "hosted_checkout"
     || item.stage === "payments_success"
+    || isPostPaymentChatgptStage(item)
   ), {
     timeoutMs: Number(context.config.runner?.checkoutTransitionTimeoutMs || 180000),
     pollMs: 500,
-    preferStages: ["payments_success", "paypal", "hosted_checkout"],
+    preferStages: ["payments_success", "chatgpt_login", "chatgpt", "paypal", "hosted_checkout"],
   });
   page = useStagePage(context, page, stageMatch, {
     logger,
@@ -1005,6 +1027,9 @@ export async function fillPlusCheckoutStep(context, { logger } = {}) {
   if (stage.stage === "payments_success") {
     setCheckoutSubstep(context, "payments-success");
     return { status: "skipped", reason: "already_on_payments_success", stage };
+  }
+  if (isPostPaymentChatgptStage(stage)) {
+    return resolvePostPaymentChatgptStage(context, page, stage, { logger });
   }
 
   const maxMs = Number(context.config.runner?.paypalHostedTimeoutMs || 900000);
@@ -1047,8 +1072,9 @@ export async function fillPlusCheckoutStep(context, { logger } = {}) {
       item.stage === "paypal"
       || item.stage === "hosted_checkout"
       || item.stage === "payments_success"
+      || isPostPaymentChatgptStage(item)
     ), {
-      preferStages: ["payments_success", "paypal", "hosted_checkout"],
+      preferStages: ["payments_success", "chatgpt_login", "chatgpt", "paypal", "hosted_checkout"],
     });
     if (activeMatch) {
       page = useStagePage(context, page, activeMatch, {
@@ -1062,6 +1088,9 @@ export async function fillPlusCheckoutStep(context, { logger } = {}) {
     if (stage.stage === "payments_success") {
       setCheckoutSubstep(context, "payments-success");
       return { status: "done", reason: "payments_success", stage };
+    }
+    if (isPostPaymentChatgptStage(stage)) {
+      return resolvePostPaymentChatgptStage(context, page, stage, { logger });
     }
     if (stage.stage !== "paypal" && stage.stage !== "hosted_checkout") {
       await page.waitForTimeout(1000);
@@ -1142,6 +1171,9 @@ export async function fillPlusCheckoutStep(context, { logger } = {}) {
       if (stage.stage === "payments_success") {
         setCheckoutSubstep(context, "payments-success");
         return { status: "done", reason: "payments_success_after_openai_hosted_checkout", stage };
+      }
+      if (isPostPaymentChatgptStage(stage)) {
+        return resolvePostPaymentChatgptStage(context, page, stage, { logger });
       }
       if (stage.stage !== "paypal") {
         await page.waitForTimeout(1000);

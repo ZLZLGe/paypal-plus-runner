@@ -12,6 +12,7 @@ import {
   shouldSkipSignupPhoneRegistrationSteps,
   waitForPostSignupPhoneSubmitState,
 } from "../src/steps/phone-flow.js";
+import { dismissChatgptPrivacyDialog } from "../src/steps/chatgpt-privacy.js";
 import { fillPasswordStep } from "../src/steps/fill-password.js";
 import { fetchSignupPhoneCodeStep } from "../src/steps/phone-flow.js";
 import { WorkflowStepRetryError } from "../src/utils/errors.js";
@@ -53,6 +54,64 @@ assert.equal(shouldSkipSignupPhoneRegistrationSteps({
 assert.equal(isLocalhostOAuthCallbackUrl("https://auth.openai.com/sign-in-with-chatgpt/codex/consent"), false);
 assert.equal(isLocalhostOAuthCallbackUrl("http://127.0.0.1:1455/auth/callback?code=abc&state=state"), true);
 assert.equal(isLocalhostOAuthCallbackUrl("http://localhost:1455/auth/callback?error=access_denied&state=state"), true);
+
+{
+  let dialogVisible = true;
+  const makeElement = ({ text = "", attrs = {}, style = {}, children = [] } = {}) => ({
+    textContent: text,
+    innerText: text,
+    value: attrs.value || "",
+    id: attrs.id || "",
+    className: attrs.className || "",
+    disabled: false,
+    getAttribute: (name) => attrs[name] ?? null,
+    getBoundingClientRect: () => (dialogVisible
+      ? { width: 320, height: 160 }
+      : { width: 0, height: 0 }),
+    querySelectorAll: (selector) => (String(selector).includes("button") ? children : []),
+    click() {
+      this.clicked = true;
+      dialogVisible = false;
+    },
+    style,
+  });
+  const acceptButton = makeElement({ text: "同意して閉じる", attrs: { "aria-label": "同意して閉じる" } });
+  const dialog = makeElement({
+    text: "当社では cookies を使用しています 同意して閉じる",
+    attrs: { role: "dialog" },
+    style: { position: "fixed" },
+    children: [acceptButton],
+  });
+  const page = {
+    evaluate: async (fn) => {
+      const previous = { window: globalThis.window, document: globalThis.document };
+      try {
+        globalThis.window = {
+          getComputedStyle: (el) => ({
+            display: "block",
+            visibility: "visible",
+            opacity: "1",
+            position: el?.style?.position || "static",
+          }),
+        };
+        globalThis.document = {
+          querySelectorAll: () => (dialogVisible ? [dialog] : []),
+        };
+        return await fn();
+      } finally {
+        if (previous.window === undefined) delete globalThis.window;
+        else globalThis.window = previous.window;
+        if (previous.document === undefined) delete globalThis.document;
+        else globalThis.document = previous.document;
+      }
+    },
+    waitForTimeout: async (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  };
+  const privacy = await dismissChatgptPrivacyDialog(page, { timeoutMs: 1000, stableAbsentMs: 1, pollMs: 1 });
+  assert.equal(privacy.clicked, true);
+  assert.equal(privacy.settled, true);
+  assert.equal(dialogVisible, false);
+}
 
 assert.equal(resolveSignupPhoneActivationForOauth({
   signupPhoneActivation: {

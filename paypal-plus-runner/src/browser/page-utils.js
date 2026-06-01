@@ -23,13 +23,18 @@ export async function detectPageStage(page) {
       stripePaypalRedirectSucceeded: isStripePaypalRedirectSucceededUrl(url),
     };
   }
-  if (/chatgpt\.com|chat\.openai\.com/i.test(host) && /\/payments\/success/i.test(path)) {
+  const isChatgptHost = /chatgpt\.com|chat\.openai\.com/i.test(host);
+
+  if (isChatgptHost && /\/payments\/success/i.test(path)) {
     return { stage: "payments_success", url, host, path };
   }
-  if (/chatgpt\.com|chat\.openai\.com/i.test(host) && /\/checkout(?:\/|$)/i.test(path)) {
+  if (isChatgptHost && /\/checkout(?:\/|$)/i.test(path)) {
     return { stage: "chatgpt_checkout", url, host, path };
   }
-  if (/chatgpt\.com|chat\.openai\.com/i.test(host)) return { stage: "chatgpt", url, host, path };
+  if (isChatgptHost && /\/auth\/login(?:\/|$)/i.test(path)) {
+    return { stage: "chatgpt_login", url, host, path };
+  }
+  if (isChatgptHost) return { stage: "chatgpt", url, host, path };
   if (/auth0\.openai\.com|auth\.openai\.com|accounts\.openai\.com/i.test(host)) {
     return { stage: "openai_auth", url, host, path };
   }

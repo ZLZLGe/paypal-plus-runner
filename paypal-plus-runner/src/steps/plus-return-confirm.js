@@ -6,6 +6,7 @@ import {
 } from "../browser/page-utils.js";
 import { assertPlusSessionJson, readSessionJson } from "../providers/session-json.js";
 import { updateRun } from "../db/run-history-store.js";
+import { dismissChatgptPrivacyDialog } from "./chatgpt-privacy.js";
 
 function setReturnSubstep(context = {}, substep = "") {
   const currentStep = substep ? `plus-checkout-return/${substep}` : "plus-checkout-return";
@@ -32,6 +33,18 @@ async function verifyPlusSession(context, { logger } = {}) {
       }).catch((error) => {
         lastError = error;
       });
+    }
+    const privacy = await dismissChatgptPrivacyDialog(page, {
+      timeoutMs: Number(context.config.runner?.chatgptPrivacyDialogTimeoutMs || 6000),
+    });
+    if (privacy.present && !privacy.settled) {
+      lastError = new Error(`ChatGPT privacy dialog not dismissed: ${privacy.reason}`);
+      logger?.warn?.("ChatGPT privacy dialog not dismissed before Plus session verification", privacy);
+      await page.waitForTimeout(pollMs);
+      continue;
+    }
+    if (privacy.clicked) {
+      logger?.info?.("ChatGPT privacy dialog dismissed before Plus session verification", privacy);
     }
     try {
       const session = await readSessionJson(page);
@@ -65,6 +78,7 @@ export async function plusReturnConfirmStep(context, { logger } = {}) {
   const stage = await waitForUrlStage(page, (item) => (
     item.stage === "payments_success"
     || item.stage === "chatgpt"
+    || item.stage === "chatgpt_login"
     || (item.stage === "chatgpt" && /plus|pricing|checkout/i.test(item.url))
     || isStripePaypalRedirectSucceededUrl(item.url)
   ), {
@@ -85,6 +99,11 @@ export async function plusReturnConfirmStep(context, { logger } = {}) {
     setReturnSubstep(context, "chatgpt-plus-session");
     const verified = await verifyPlusSession(context, { logger });
     return { status: "done", reason: "chatgpt_plus_session_confirmed", stage, verified };
+  }
+  if (stage.stage === "chatgpt_login") {
+    setReturnSubstep(context, "chatgpt-login-plus-session");
+    const verified = await verifyPlusSession(context, { logger });
+    return { status: "done", reason: "chatgpt_login_plus_session_confirmed", stage, verified };
   }
   const current = await detectPageStage(page);
   setReturnSubstep(context, "not-confirmed");
