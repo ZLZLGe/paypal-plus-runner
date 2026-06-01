@@ -1,6 +1,7 @@
 import { injectSignupFlow, dispatchChromeRuntimeMessage } from "../browser/inject.js";
 import { safeGoto } from "../browser/page-utils.js";
 import { directSubmitSignupEmail, isThirdPartyOAuthDetourUrl, openSignupEmailEntry } from "./submit-signup-email.js";
+import { shouldSkipSignupPhoneRegistrationSteps } from "./phone-flow.js";
 
 const AUTH_RETRY_BUTTON_SELECTOR = "button[data-dd-action-name='Try again']";
 const SIGNUP_PASSWORD_INPUT_SELECTOR = "form[action='/create-account/password'] input[name='new-password']";
@@ -10,7 +11,7 @@ function positiveInt(value, fallback) {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
-function parseRetryDelayMs(value, fallback = [5000, 10000, 15000, 20000]) {
+export function parseRetryDelayMs(value, fallback = [5000, 10000, 15000, 20000]) {
   if (Array.isArray(value)) {
     const parsed = value.map((item) => positiveInt(item, 0)).filter((item) => item > 0);
     return parsed.length ? parsed : fallback;
@@ -86,6 +87,10 @@ async function detectSignupPasswordValidationState(page) {
         && rect.height > 0;
     };
     const passwordInput = Array.from(document.querySelectorAll("input[type='password']")).find(visible) || null;
+    const form = passwordInput?.closest("form") || document.querySelector("form[action='/create-account/password']");
+    const disabledFieldset = passwordInput?.closest("fieldset[disabled]") || form?.closest?.("fieldset[disabled]") || null;
+    const submitButton = Array.from((form || document).querySelectorAll("button[type='submit'], input[type='submit']"))
+      .find(visible) || null;
     const text = String(document.body?.innerText || document.body?.textContent || "").replace(/\s+/g, " ").trim();
     const url = location.href;
     const retryButtons = Array.from(document.querySelectorAll("button[data-dd-action-name='Try again']")).filter(visible);
@@ -124,11 +129,35 @@ async function detectSignupPasswordValidationState(page) {
       visibleErrorText
       && /password.{0,80}(?:required|invalid|too short)|パスワード.{0,80}(?:必要|以上|無効)|incorrect\s+phone\s+number\s+or\s+password|account\s+associated\s+with\s+this\s+phone\s+number/i.test(visibleErrorText)
     ) || hasLengthError || invalidPassword;
+    const disabledByFieldset = Boolean(disabledFieldset);
+    const inputDisabled = Boolean(passwordInput && (
+      passwordInput.disabled
+      || passwordInput.matches?.(":disabled")
+      || disabledByFieldset
+    ));
+    const submitDisabled = Boolean(submitButton && (
+      submitButton.disabled
+      || submitButton.matches?.(":disabled")
+      || submitButton.getAttribute("aria-disabled") === "true"
+      || disabledByFieldset
+    ));
+    const submitHasSpinner = Boolean(submitButton?.querySelector?.(
+      "[class*='animate-spin'], [class*='spinner'], [class*='loading'], [role='progressbar'], [aria-busy='true']",
+    ));
+    const isSubmitting = Boolean(isPasswordPage && !hasPasswordError && (
+      disabledByFieldset || inputDisabled || submitDisabled || submitHasSpinner
+    ));
     return {
       isPasswordPage,
       isAuthRetryPage,
       hasPasswordError,
       hasLengthError,
+      isSubmitting,
+      disabledByFieldset,
+      inputDisabled,
+      submitDisabled,
+      submitHasSpinner,
+      submitText: String(submitButton?.textContent || submitButton?.value || "").replace(/\s+/g, " ").trim().slice(0, 120),
       passwordLength: String(passwordInput?.value || "").length,
       url,
       visibleErrorText: visibleErrorText.slice(0, 300),
@@ -169,12 +198,16 @@ async function waitForPasswordSubmitSettled(page, { timeoutMs = 12000, pollMs = 
 
 async function waitForSignupPasswordInputReady(page, { timeoutMs = 12000, pollMs = 300 } = {}) {
   const startedAt = Date.now();
+  let lastPasswordState = null;
   while (Date.now() - startedAt < timeoutMs) {
     const input = page.locator(SIGNUP_PASSWORD_INPUT_SELECTOR);
     const count = await input.count().catch(() => 0);
     if (count === 1) {
       const visible = await input.isVisible().catch(() => false);
-      if (visible) return { ready: true, count, url: page.url() };
+      if (visible) {
+        lastPasswordState = await detectSignupPasswordValidationState(page).catch(() => null);
+        if (!lastPasswordState?.isSubmitting) return { ready: true, count, url: page.url() };
+      }
     }
     const retry = await detectAuthRetryPage(page).catch(() => ({ isAuthRetryPage: false }));
     if (retry.isAuthRetryPage) {
@@ -185,7 +218,13 @@ async function waitForSignupPasswordInputReady(page, { timeoutMs = 12000, pollMs
     if (verification.isVerificationPage) return { ready: false, verification, url: verification.url };
     await page.waitForTimeout(pollMs);
   }
-  return { ready: false, url: page.url() };
+  return { ready: false, url: page.url(), password: lastPasswordState };
+}
+
+export function shouldRetrySignupPasswordSubmit(settled = {}) {
+  return settled?.state === "timeout"
+    && Boolean(settled?.password?.isPasswordPage)
+    && !settled?.password?.hasPasswordError;
 }
 
 async function clickAuthRetryWithDelay(page, delayMs, { logger, attempt, total } = {}) {
@@ -506,8 +545,11 @@ export async function fillPasswordStep(context, { logger } = {}) {
   if (context.config.runner?.skipSignupSteps === true) {
     return { status: "skipped", reason: "skipSignupSteps" };
   }
+  if (shouldSkipSignupPhoneRegistrationSteps(context)) {
+    return { status: "skipped", reason: "signup_phone_registration_already_recovered" };
+  }
   if (!context.page) throw new Error("fill-password requires a browser page");
-  const signupPassword = String(context.config.runner?.gptPassword || "myPASSword!2026");
+  const signupPassword = String(context.gptPassword || context.config.runner?.gptPassword || "myPASSword!2026");
   if (signupPassword.length < 12) {
     throw new Error(`步骤 3：配置的 gptPassword 长度为 ${signupPassword.length}，OpenAI 当前要求至少 12 字符。`);
   }
@@ -556,6 +598,22 @@ export async function fillPasswordStep(context, { logger } = {}) {
         return { status: "skipped", reason: "password_page_skipped_verification_page", verificationState: ready.verification };
       }
       if (!ready.ready) {
+        if (ready.password?.isSubmitting) {
+          const delayMs = retryDelaysMs[Math.min(attempt, retryDelaysMs.length - 1)] || 0;
+          if (!delayMs) {
+            throw new Error(`步骤 3：密码提交后页面持续提交中。URL: ${ready.url || context.page.url()}`);
+          }
+          logger?.warn?.("signup password page still submitting before retry; waiting stepped delay", {
+            attempt: attempt + 1,
+            total: retryDelaysMs.length,
+            delayMs,
+            url: ready.url || context.page.url(),
+            disabledByFieldset: Boolean(ready.password.disabledByFieldset),
+            submitDisabled: Boolean(ready.password.submitDisabled),
+          });
+          await context.page.waitForTimeout(delayMs);
+          continue;
+        }
         throw new Error(`步骤 3：Try again 后未回到精确注册密码页。URL: ${ready.url || context.page.url()}`);
       }
     }
@@ -611,8 +669,22 @@ export async function fillPasswordStep(context, { logger } = {}) {
       });
       continue;
     }
-    if (settled.state === "timeout" && settled.password?.isPasswordPage) {
-      throw new Error(`步骤 3：密码提交后仍停留在密码页。URL: ${settled.password.url}`);
+    if (shouldRetrySignupPasswordSubmit(settled)) {
+      const delayMs = retryDelaysMs[attempt];
+      if (!delayMs) {
+        throw new Error(`步骤 3：密码提交后仍停留在密码页。URL: ${settled.password.url}`);
+      }
+      logger?.warn?.("signup password submit still on password page; retrying with stepped delay", {
+        attempt: attempt + 1,
+        total: retryDelaysMs.length,
+        delayMs,
+        url: settled.password.url,
+        isSubmitting: Boolean(settled.password.isSubmitting),
+        disabledByFieldset: Boolean(settled.password.disabledByFieldset),
+        submitDisabled: Boolean(settled.password.submitDisabled),
+      });
+      await context.page.waitForTimeout(delayMs);
+      continue;
     }
     return { status: "done", reason: "signup_password_submitted", result };
   }

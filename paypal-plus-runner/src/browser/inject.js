@@ -83,10 +83,11 @@ export async function injectSignupFlow(page, { pluginRoot = DEFAULT_PLUGIN_ROOT 
   });
 }
 
-export async function dispatchChromeRuntimeMessage(page, message, { timeoutMs = 120000, onRetry = null } = {}) {
+export async function dispatchChromeRuntimeMessage(page, message, { timeoutMs = 120000, onRetry = null, attempts = 3 } = {}) {
   if (!page) throw new Error("page is required for runtime message dispatch");
   let lastError = null;
-  for (let attempt = 1; attempt <= 3; attempt += 1) {
+  const maxAttempts = Math.max(1, Number(attempts) || 3);
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     try {
       return await page.evaluate(
         async ({ payload, timeout }) => {
@@ -104,7 +105,7 @@ export async function dispatchChromeRuntimeMessage(page, message, { timeoutMs = 
       lastError = error;
       const isRetryable = /Execution context was destroyed|Cannot find context|navigation|chrome runtime shim is not installed/i
         .test(String(error.message || ""));
-      if (!isRetryable || attempt >= 3) {
+      if (!isRetryable || attempt >= maxAttempts) {
         throw error;
       }
       await page.waitForLoadState("domcontentloaded", { timeout: 30000 }).catch(() => undefined);

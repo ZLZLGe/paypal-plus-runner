@@ -29,16 +29,33 @@ function openUiDb(config) {
   return db;
 }
 
-function queryRuns(db, { status = "", limit = 100 } = {}) {
+function parseBoolean(value = "") {
+  return ["1", "true", "yes", "y", "on"].includes(String(value || "").trim().toLowerCase());
+}
+
+function queryRuns(db, { status = "", limit = 100, activeOnly = false, activeWithinMinutes = 30 } = {}) {
   const params = [];
-  const where = status ? "WHERE status = ?" : "";
-  if (status) params.push(status);
+  const clauses = [];
+  if (status) {
+    clauses.push("status = ?");
+    params.push(status);
+  }
+  if (activeOnly) {
+    const minutes = Math.max(1, Number.parseInt(String(activeWithinMinutes || 30), 10) || 30);
+    clauses.push("updated_at >= ?");
+    params.push(new Date(Date.now() - minutes * 60 * 1000).toISOString());
+  }
+  const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
   params.push(Math.max(1, Math.min(500, Number.parseInt(String(limit || 100), 10) || 100)));
   return db.prepare(`
     SELECT run_id AS runId, email, worker_id AS workerId, status, current_step AS currentStep,
            roxy_dir_id AS roxyDirId, roxy_exit_ip AS roxyExitIp,
            account_identifier_type AS accountIdentifierType,
            account_identifier AS accountIdentifier,
+           gpt_phone_account_id AS gptPhoneAccountId,
+           openai_phone_activation_id AS openAiPhoneActivationId,
+           paypal_phone_id AS paypalPhoneId,
+           account_lifecycle_status AS accountLifecycleStatus,
            cpa_upload_status AS cpaUploadStatus,
            callback_json_path AS callbackJsonPath,
            artifact_dir AS artifactDir, error, started_at AS startedAt,
@@ -56,6 +73,10 @@ function queryRun(db, runId) {
            roxy_dir_id AS roxyDirId, roxy_exit_ip AS roxyExitIp,
            account_identifier_type AS accountIdentifierType,
            account_identifier AS accountIdentifier,
+           gpt_phone_account_id AS gptPhoneAccountId,
+           openai_phone_activation_id AS openAiPhoneActivationId,
+           paypal_phone_id AS paypalPhoneId,
+           account_lifecycle_status AS accountLifecycleStatus,
            cpa_upload_status AS cpaUploadStatus,
            callback_json_path AS callbackJsonPath,
            artifact_dir AS artifactDir, error, started_at AS startedAt,
@@ -68,6 +89,7 @@ function queryRun(db, runId) {
 function queryResource(db, table) {
   const allowed = {
     outlook: "SELECT status, COUNT(1) AS count FROM outlook_emails GROUP BY status ORDER BY status",
+    "gpt-phone-accounts": "SELECT lifecycle_status AS status, COUNT(1) AS count FROM gpt_phone_accounts GROUP BY lifecycle_status ORDER BY lifecycle_status",
     "paypal-phones": "SELECT status, COUNT(1) AS count FROM paypal_phone_pool GROUP BY status ORDER BY status",
     "openai-phones": "SELECT status, COUNT(1) AS count FROM openai_phone_activations GROUP BY status ORDER BY status",
   };
@@ -117,6 +139,10 @@ export function createUiServer(config) {
             runs: queryRuns(db, {
               status: parsed.searchParams.get("status") || "",
               limit: parsed.searchParams.get("limit") || 100,
+              activeOnly: parseBoolean(parsed.searchParams.get("activeOnly") || ""),
+              activeWithinMinutes: parsed.searchParams.get("activeWithinMinutes")
+                || config.ui?.activeRunMinutes
+                || 30,
             }),
           });
         }

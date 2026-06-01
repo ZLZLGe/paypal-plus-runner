@@ -23,6 +23,10 @@ export function updateRun(db, runId, patch = {}) {
     "account_identifier",
     "cpa_upload_status",
     "callback_json_path",
+    "gpt_phone_account_id",
+    "openai_phone_activation_id",
+    "paypal_phone_id",
+    "account_lifecycle_status",
   ];
   const entries = Object.entries(patch).filter(([key]) => allowed.includes(key));
   if (entries.length === 0) return;

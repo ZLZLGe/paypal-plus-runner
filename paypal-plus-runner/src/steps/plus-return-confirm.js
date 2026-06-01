@@ -5,8 +5,18 @@ import {
   waitForUrlStage,
 } from "../browser/page-utils.js";
 import { assertPlusSessionJson, readSessionJson } from "../providers/session-json.js";
+import { updateRun } from "../db/run-history-store.js";
+
+function setReturnSubstep(context = {}, substep = "") {
+  const currentStep = substep ? `plus-checkout-return/${substep}` : "plus-checkout-return";
+  context.currentStep = currentStep;
+  if (context.db && context.runId) {
+    updateRun(context.db, context.runId, { current_step: currentStep });
+  }
+}
 
 async function verifyPlusSession(context, { logger } = {}) {
+  setReturnSubstep(context, "verify-plus-session");
   const page = context.page;
   const timeoutMs = Number(context.config.runner?.plusSessionVerifyTimeoutMs || 180000);
   const pollMs = Number(context.config.runner?.plusSessionVerifyPollMs || 5000);
@@ -46,6 +56,7 @@ async function verifyPlusSession(context, { logger } = {}) {
 }
 
 export async function plusReturnConfirmStep(context, { logger } = {}) {
+  setReturnSubstep(context, "wait-success");
   const page = context.page;
   if (!page) throw new Error("plus-return-confirm requires a browser page");
   if (context.plusAlreadyPaid || context.checkout?.alreadyPaid) {
@@ -53,6 +64,7 @@ export async function plusReturnConfirmStep(context, { logger } = {}) {
   }
   const stage = await waitForUrlStage(page, (item) => (
     item.stage === "payments_success"
+    || item.stage === "chatgpt"
     || (item.stage === "chatgpt" && /plus|pricing|checkout/i.test(item.url))
     || isStripePaypalRedirectSucceededUrl(item.url)
   ), {
@@ -60,13 +72,24 @@ export async function plusReturnConfirmStep(context, { logger } = {}) {
     pollMs: 1000,
   });
   if (isStripePaypalRedirectSucceededUrl(stage.url) || context.stripePaypalRedirectSucceeded) {
+    setReturnSubstep(context, "stripe-redirect-succeeded");
     const verified = await verifyPlusSession(context, { logger });
     return { status: "done", reason: "stripe_paypal_redirect_plus_confirmed", stage, verified };
   }
   if (stage.stage === "payments_success") {
+    setReturnSubstep(context, "payments-success");
     const verified = await verifyPlusSession(context, { logger });
     return { status: "done", reason: "payments_success", stage, verified };
   }
+  if (stage.stage === "chatgpt") {
+    setReturnSubstep(context, "chatgpt-plus-session");
+    const verified = await verifyPlusSession(context, { logger });
+    return { status: "done", reason: "chatgpt_plus_session_confirmed", stage, verified };
+  }
   const current = await detectPageStage(page);
-  return { status: "skipped", reason: "success_url_not_observed", stage: current };
+  setReturnSubstep(context, "not-confirmed");
+  const error = new Error(`Plus return confirmation failed: success URL/session was not observed. stage=${current.stage || "unknown"} url=${current.url || page.url()}`);
+  error.code = "PLUS_RETURN_NOT_CONFIRMED";
+  error.retryable = true;
+  throw error;
 }

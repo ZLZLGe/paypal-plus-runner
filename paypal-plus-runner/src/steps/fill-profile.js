@@ -2,6 +2,7 @@ import { injectSignupFlow, dispatchChromeRuntimeMessage } from "../browser/injec
 import { safeGoto } from "../browser/page-utils.js";
 import { detectLoggedInChatgpt } from "./signup-state.js";
 import { recoverSignupRedirectedLoginStep } from "./phone-flow.js";
+import { buildSignupProfilePayload } from "./signup-profile.js";
 
 function positiveInt(value, fallback) {
   const parsed = Number.parseInt(String(value ?? ""), 10);
@@ -259,9 +260,7 @@ export async function fillProfileStep(context, { logger } = {}) {
       payload: {
         nodeId: "fill-profile",
         visibleStep: 5,
-        firstName: context.checkoutProfile.guest.firstName,
-        lastName: context.checkoutProfile.guest.lastName,
-        age: Number(context.config.runner?.signupAge || 25),
+        ...buildSignupProfilePayload(context),
       },
     }, {
       onRetry: async () => injectSignupFlow(context.page, {
@@ -295,9 +294,7 @@ export async function fillProfileStep(context, { logger } = {}) {
       payload: {
         nodeId: "fill-profile",
         visibleStep: 5,
-        firstName: context.checkoutProfile.guest.firstName,
-        lastName: context.checkoutProfile.guest.lastName,
-        age: Number(context.config.runner?.signupAge || 25),
+        ...buildSignupProfilePayload(context),
       },
     }, {
       onRetry: async () => injectSignupFlow(context.page, {

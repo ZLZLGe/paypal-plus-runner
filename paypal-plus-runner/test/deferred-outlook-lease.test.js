@@ -32,7 +32,7 @@ function insertOutlook(db, email = "deferred@example.com") {
 
 function insertPhone(db, dir) {
   const file = path.join(dir, "phones.txt");
-  fs.writeFileSync(file, "+15722337281|http://example.test/sms");
+  fs.writeFileSync(file, "+817094717091|http://example.test/sms");
   importPaypalPhonesFile(db, file, { maxUse: 1 });
 }
 
@@ -47,6 +47,8 @@ function smsOauthConfig(dbPath) {
     paypalPhone: { leaseMinutes: 30 },
     checkoutProfile: {
       addressProvider: "fallback",
+      firstName: "舞桜",
+      lastName: "脇田",
       fallbackAddress: {
         street: "1-1-2 Otemachi",
         city: "Chiyoda-ku",
@@ -156,16 +158,114 @@ function smsOauthConfig(dbPath) {
       });
     }, { error: "failed after submit" });
 
+    assert.equal(released, true);
+    const row = db.prepare("SELECT status, attempt_count, last_error FROM outlook_emails WHERE id = ?").get(outlook.id);
+    assert.equal(row.status, "new");
+    assert.equal(row.attempt_count, 0);
+    assert.equal(row.last_error, "failed after submit");
+  } finally {
+    db.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+{
+  const { dir, db } = makeTempDb();
+  try {
+    const outlook = insertOutlook(db, "verified@example.com");
+    const account = leaseNextOutlookEmail(db);
+    markOutlookRunning(db, account.id);
+
+    const context = {
+      config: smsOauthConfig(path.join(dir, "test.db")),
+      outlookLeaseDeferred: true,
+      account,
+      boundEmailSubmitted: true,
+      boundEmailVerified: true,
+    };
+    const released = releaseDeferredOutlookOnFailure(context, (id, options) => {
+      releaseOutlookEmail(db, id, {
+        error: options.error,
+        decrementAttempt: true,
+      });
+    }, { error: "failed after verified" });
+
+    assert.equal(released, true);
+    const row = db.prepare("SELECT status, attempt_count, last_error FROM outlook_emails WHERE id = ?").get(outlook.id);
+    assert.equal(row.status, "new");
+    assert.equal(row.attempt_count, 0);
+    assert.equal(row.last_error, "failed after verified");
+  } finally {
+    db.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+{
+  const { dir, db } = makeTempDb();
+  try {
+    const outlook = insertOutlook(db, "completed@example.com");
+    const account = leaseNextOutlookEmail(db);
+    markOutlookRunning(db, account.id);
+
+    const context = {
+      config: smsOauthConfig(path.join(dir, "test.db")),
+      outlookLeaseDeferred: true,
+      account,
+      boundEmailSubmitted: true,
+      boundEmailVerified: true,
+      boundEmailCompleted: true,
+    };
+    const released = releaseDeferredOutlookOnFailure(context, (id, options) => {
+      releaseOutlookEmail(db, id, {
+        error: options.error,
+        decrementAttempt: true,
+      });
+    }, { error: "failed after completed" });
+
     assert.equal(released, false);
     markOutlookFailure(db, outlook.id, {
       retryable: false,
-      error: "failed after submit",
+      error: "failed after completed",
       maxAttempts: 5,
     });
     const row = db.prepare("SELECT status, attempt_count, last_error FROM outlook_emails WHERE id = ?").get(outlook.id);
     assert.equal(row.status, "failed");
     assert.equal(row.attempt_count, 1);
-    assert.equal(row.last_error, "failed after submit");
+    assert.equal(row.last_error, "failed after completed");
+  } finally {
+    db.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+{
+  const { dir, db } = makeTempDb();
+  try {
+    const outlook = insertOutlook(db, "needs-rebind@example.com");
+    const account = leaseNextOutlookEmail(db);
+    markOutlookRunning(db, account.id);
+
+    const context = {
+      config: smsOauthConfig(path.join(dir, "test.db")),
+      outlookLeaseDeferred: true,
+      account,
+      boundEmailSubmitted: true,
+      boundEmailVerified: true,
+      boundEmailNeedsRebind: true,
+    };
+    const released = releaseDeferredOutlookOnFailure(context, (id, options) => {
+      releaseOutlookEmail(db, id, {
+        error: options.error,
+        decrementAttempt: true,
+      });
+    }, { error: "oauth still required add-email" });
+
+    assert.equal(released, true);
+    const row = db.prepare("SELECT status, attempt_count, last_error FROM outlook_emails WHERE id = ?").get(outlook.id);
+    assert.equal(row.status, "new");
+    assert.equal(row.attempt_count, 0);
+    assert.equal(row.last_error, "oauth still required add-email");
   } finally {
     db.close();
     fs.rmSync(dir, { recursive: true, force: true });
@@ -199,6 +299,52 @@ function smsOauthConfig(dbPath) {
     db.close();
     fs.rmSync(dir, { recursive: true, force: true });
   }
+}
+
+{
+  const worker = new Worker({
+    id: "worker_1",
+    config: {
+      ...smsOauthConfig(":memory:"),
+      paypalRiskRetry: { newWindow: true },
+    },
+    logger: { info() {}, warn() {}, error() {} },
+    windowInfo: { dirId: "old-dir", page: "old-page" },
+  });
+  let replaced = false;
+  worker.replaceWindowForRiskRetry = async ({ reason }) => {
+    replaced = reason === "paypal_risk_retry";
+    worker.windowInfo = {
+      dirId: "new-dir",
+      page: "new-page",
+      browser: "new-browser",
+      context: "new-context",
+    };
+    return { dirId: "new-dir", asn: "AS2516", region: "JP" };
+  };
+  worker.maybeRotateWindowProxy = async () => {
+    throw new Error("should not rotate old window");
+  };
+  const context = {};
+  context.rotateWindowProxy = async (options = {}) => {
+    const useNewWindow = options.newWindow === true || (
+      options.reason === "paypal_risk_retry"
+      && worker.config.paypalRiskRetry?.newWindow === true
+    );
+    const result = useNewWindow
+      ? await worker.replaceWindowForRiskRetry({ reason: options.reason || "workflow_proxy_rotation" })
+      : await worker.maybeRotateWindowProxy({ force: true, reason: options.reason || "workflow_proxy_rotation" });
+    context.windowInfo = worker.windowInfo;
+    context.browser = worker.windowInfo?.browser || context.browser;
+    context.browserContext = worker.windowInfo?.context || context.browserContext;
+    context.page = worker.windowInfo?.page || context.page;
+    return result;
+  };
+  const rotation = await context.rotateWindowProxy({ reason: "paypal_risk_retry", newWindow: true });
+  assert.equal(replaced, true);
+  assert.equal(rotation.dirId, "new-dir");
+  assert.equal(context.page, "new-page");
+  worker.close();
 }
 
 console.log("deferred-outlook-lease tests passed");

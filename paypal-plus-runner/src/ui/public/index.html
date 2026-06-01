@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Runner Console</title>
+  <title>Live Runner Board</title>
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
@@ -11,8 +11,8 @@
     <header class="topbar">
       <div class="brand">
         <p class="eyebrow">paypal-plus-runner</p>
-        <h1>运行监控台</h1>
-        <p class="subtitle">窗口、账号流程、CPA 上传和回调 JSON 的统一观察面板</p>
+        <h1>实时运行账号</h1>
+        <p class="subtitle">只展示当前正在执行的窗口、账号阶段和资源池余量。</p>
       </div>
       <div class="toolbar" aria-label="控制区">
         <div class="sync-state">
@@ -30,14 +30,9 @@
         <div class="panel-header">
           <div>
             <p class="section-kicker">Accounts</p>
-            <h2 id="runs-title">窗口与账号流程</h2>
+            <h2 id="runs-title">正在运行的账号</h2>
           </div>
-          <div class="filters" id="filters" aria-label="运行状态筛选">
-            <button class="filter active" type="button" data-filter="all">全部</button>
-            <button class="filter" type="button" data-filter="running">运行中</button>
-            <button class="filter" type="button" data-filter="failed">失败</button>
-            <button class="filter" type="button" data-filter="done">完成</button>
-          </div>
+          <span class="live-pill">Live only</span>
         </div>
         <div class="run-list" id="runs"></div>
       </section>
@@ -51,7 +46,7 @@
             </div>
             <span class="status neutral" id="detail-status">未选择</span>
           </div>
-          <div id="run-detail" class="detail-empty">选择左侧账号后查看完整 runId、路径、错误和回调信息。</div>
+          <div id="run-detail" class="detail-empty">选择左侧运行账号后查看当前阶段、账号标识和租赁资源。</div>
         </section>
 
         <section class="panel resource-panel" aria-labelledby="resource-title">
@@ -63,24 +58,11 @@
           </div>
           <div class="resource-list" id="resources"></div>
         </section>
-
-        <section class="panel events-panel" aria-labelledby="events-title">
-          <div class="panel-header compact">
-            <div>
-              <p class="section-kicker">Live</p>
-              <h2 id="events-title">实时事件</h2>
-            </div>
-            <span class="event-count" id="event-count">0</span>
-          </div>
-          <div id="events" class="events">
-            <div class="empty-state">暂无实时事件，新的运行日志会自动出现在这里。</div>
-          </div>
-        </section>
       </aside>
     </main>
 
     <section class="footer-note">
-      本页面只展示脱敏后的运行信息，不展示 bearer、token、验证码、完整 OAuth code/state。
+      本页面只展示正在运行的脱敏信息，不展示 token、验证码、完整 OAuth code/state。
     </section>
   </div>
   <script src="/app.js"></script>

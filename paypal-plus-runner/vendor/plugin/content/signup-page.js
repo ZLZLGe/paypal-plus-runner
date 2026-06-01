@@ -217,12 +217,52 @@ function isVisibleElement(el) {
 
 function getVisibleSplitVerificationInputs() {
   return Array.from(document.querySelectorAll('input[maxlength="1"]'))
+    .filter(isVerificationCodeCandidateInput)
     .filter(isVisibleElement);
+}
+
+function isVerificationCodeCandidateInput(input) {
+  if (!input || !isVisibleElement(input)) return false;
+
+  const fieldMeta = [
+    input.name,
+    input.id,
+    input.getAttribute?.('aria-label'),
+    input.getAttribute?.('placeholder'),
+    input.getAttribute?.('autocomplete'),
+    input.getAttribute?.('data-type'),
+    input.getAttribute?.('inputmode'),
+  ]
+    .filter(Boolean)
+    .join(' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  if (/(^|\b|[-_])(age|birthday|birth|bday|dateofbirth|dob|year|month|day|年齢|生日|出生)(\b|[-_]|$)/i.test(fieldMeta)) {
+    return false;
+  }
+
+  const form = input.form || input.closest?.('form') || null;
+  const formAction = String(form?.getAttribute?.('action') || form?.action || '');
+  const profileRoute = /\/(?:create-account\/profile|u\/signup\/profile|signup\/profile|about-you)(?:[/?#]|$)/i
+    .test(`${location.pathname || ''} ${formAction}`);
+  if (profileRoute && !/(code|otp|one[-\s]*time|verification|確認コード|認証コード|验证码)/i.test(fieldMeta)) {
+    return false;
+  }
+
+  const maxLength = Number(input.getAttribute?.('maxlength') || input.maxLength || 0);
+  if (maxLength === 1 || maxLength === 6) return true;
+  if (/(code|otp|one[-\s]*time|verification|確認コード|認証コード|验证码)/i.test(fieldMeta)) return true;
+
+  const pageLooksVerification = /\/(?:phone|contact|email)-verification(?:[/?#]|$)/i.test(location.pathname || '')
+    || /verification|verify|sms|text message|確認コード|認証コード|验证码|認証/i.test(getPageTextSnapshot());
+  return String(input.getAttribute?.('inputmode') || '').toLowerCase() === 'numeric' && pageLooksVerification;
 }
 
 function getVerificationCodeTarget() {
   const splitInputs = getVisibleSplitVerificationInputs();
-  const codeInput = document.querySelector(VERIFICATION_CODE_INPUT_SELECTOR);
+  const codeInput = Array.from(document.querySelectorAll(VERIFICATION_CODE_INPUT_SELECTOR))
+    .find(isVerificationCodeCandidateInput);
   if (codeInput && isVisibleElement(codeInput)) {
     const maxLength = Number(codeInput.getAttribute?.('maxlength') || codeInput.maxLength || 0);
     if (maxLength === 1 && splitInputs.length >= 6) {
@@ -599,6 +639,18 @@ function getExactJpSignupPhoneForm(phoneInput = getSignupPhoneInput()) {
   }
   const form = phoneInput.closest?.(JP_SIGNUP_PHONE_FORM_SELECTOR) || null;
   return form && isVisibleElement(form) ? form : null;
+}
+
+function getPhoneCountryControlScope(phoneInput = getSignupPhoneInput()) {
+  if (!phoneInput) {
+    return null;
+  }
+  return getExactJpSignupPhoneForm(phoneInput)
+    || phoneInput.form
+    || phoneInput.closest?.('form')
+    || phoneInput.closest?.('fieldset')
+    || phoneInput.closest?.('[data-rac]')
+    || null;
 }
 
 function getExactJpSignupPhoneSubmitButton(phoneInput = getSignupPhoneInput(), { allowDisabled = false } = {}) {
@@ -1625,12 +1677,25 @@ function isSignupPhoneCountrySelect(select) {
 }
 
 function getSignupPhoneCountrySelect(phoneInput = getSignupPhoneInput()) {
-  const form = getExactJpSignupPhoneForm(phoneInput);
-  if (!form) {
+  const scope = getPhoneCountryControlScope(phoneInput);
+  if (!scope || typeof scope.querySelectorAll !== 'function') {
     return null;
   }
-  const selects = Array.from(form.querySelectorAll(JP_SIGNUP_PHONE_COUNTRY_SELECT_SELECTOR));
-  return selects.length === 1 && isSignupPhoneCountrySelect(selects[0]) ? selects[0] : null;
+  const selectors = [
+    JP_SIGNUP_PHONE_COUNTRY_SELECT_SELECTOR,
+    'select[tabindex="-1"]',
+    'select[aria-hidden="true"]',
+    'select',
+  ];
+  const selects = [];
+  for (const selector of selectors) {
+    for (const select of Array.from(scope.querySelectorAll(selector) || [])) {
+      if (!selects.includes(select) && isSignupPhoneCountrySelect(select)) {
+        selects.push(select);
+      }
+    }
+  }
+  return selects[0] || null;
 }
 
 function getSignupPhoneSelectedCountryOption(phoneInput = getSignupPhoneInput()) {
@@ -1651,13 +1716,34 @@ function getSignupPhoneCountryButtonText(phoneInput = getSignupPhoneInput()) {
 }
 
 function getSignupPhoneCountryButton(phoneInput = getSignupPhoneInput()) {
-  const form = getExactJpSignupPhoneForm(phoneInput);
-  if (!form) {
+  const scope = getPhoneCountryControlScope(phoneInput);
+  if (!scope || typeof scope.querySelectorAll !== 'function') {
     return null;
   }
-  const buttons = Array.from(form.querySelectorAll(JP_SIGNUP_PHONE_COUNTRY_COMBOBOX_SELECTOR))
-    .filter(isVisibleElement);
-  return buttons.length === 1 ? buttons[0] : null;
+  const selectors = [
+    JP_SIGNUP_PHONE_COUNTRY_COMBOBOX_SELECTOR,
+    'button[role="combobox"][aria-haspopup="listbox"]',
+    'button[role="combobox"]',
+    'button[aria-haspopup="listbox"]',
+  ];
+  const buttons = [];
+  for (const selector of selectors) {
+    for (const button of Array.from(scope.querySelectorAll(selector) || [])) {
+      if (buttons.includes(button) || !isVisibleElement(button)) {
+        continue;
+      }
+      const text = getActionText(button);
+      const labelText = [
+        button.getAttribute?.('aria-label') || '',
+        button.getAttribute?.('aria-labelledby') || '',
+        text,
+      ].join(' ');
+      if (extractDialCodeFromText(text) || /country|国コード|国番号|電話番号/i.test(labelText)) {
+        buttons.push(button);
+      }
+    }
+  }
+  return buttons[0] || null;
 }
 
 function getSignupPhoneDisplayedDialCode(phoneInput = getSignupPhoneInput()) {
@@ -2467,6 +2553,8 @@ function getLoginPhoneSubmitButtonDiagnostics(button) {
 
 function getLoginPhoneInputCandidateDiagnostics(limit = 12) {
   return collectPhoneInputCandidates([
+    'form[action*="/log-in" i][action*="usernameKind=phone_number" i] input[type="tel"]:not([maxlength="6"])',
+    'form[action*="/log-in" i][action*="usernameKind=phone_number" i] input[autocomplete="tel"]',
     `${JP_LOGIN_FORM_SELECTOR} form input[type="tel"]:not([maxlength="6"])`,
     `${JP_LOGIN_FORM_SELECTOR} form input[name="phoneNumber"]:not([type="hidden"])`,
     `${JP_LOGIN_FORM_SELECTOR} form input[name="phone_number"]:not([type="hidden"])`,
@@ -2885,8 +2973,8 @@ const CONTINUE_ACTION_PATTERN = /继续|continue/i;
 const ADD_PHONE_PAGE_PATTERN = /add[\s-]*(?:a\s+)?phone|添加(?:手机|手机号|电话号码)|绑定(?:手机|手机号|电话号码)|验证(?:你的|您)?(?:手机|手机号|电话号码)|需要(?:手机|手机号|电话号码)|提供(?:手机|手机号|电话号码)|provide\s+(?:a\s+)?phone\s+number|phone\s+number\s+(?:required|verification)|verify\s+(?:your\s+)?phone|confirm\s+(?:your\s+)?phone/i;
 const ADD_EMAIL_PAGE_PATTERN = /add[\s-]*email|添加(?:电子邮件|邮箱)|要求提供(?:电子邮件|邮箱)地址|提供(?:电子邮件|邮箱)地址|provide\s+(?:an?\s+)?email\s+address|email\s+address\s+required/i;
 const STEP5_SUBMIT_ERROR_PATTERN = /无法根据该信息创建帐户|请重试|unable\s+to\s+create\s+(?:your\s+)?account|couldn'?t\s+create\s+(?:your\s+)?account|something\s+went\s+wrong|invalid\s+(?:birthday|birth|date)|生日|出生日期/i;
-const AUTH_TIMEOUT_ERROR_TITLE_PATTERN = /糟糕，出错了|something\s+went\s+wrong|oops/i;
-const AUTH_TIMEOUT_ERROR_DETAIL_PATTERN = /operation\s+timed\s+out|timed\s+out|请求超时|操作超时|failed\s+to\s+fetch|network\s+error|fetch\s+failed/i;
+const AUTH_TIMEOUT_ERROR_TITLE_PATTERN = /糟糕，出错了|something\s+went\s+wrong|oops|不明なエラー|unknown\s+error/i;
+const AUTH_TIMEOUT_ERROR_DETAIL_PATTERN = /operation\s+timed\s+out|timed\s+out|请求超时|操作超时|failed\s+to\s+fetch|network\s+error|fetch\s+failed|server\s+error\s*500|internal\s+server\s+error|http\s*500/i;
 const AUTH_ROUTE_ERROR_PATTERN = /405\s+method\s+not\s+allowed|route\s+error.*405|did\s+not\s+provide\s+an?\s+[`'"]?action|post\s+request\s+to\s+["']?\/email-verification/i;
 const STEP4_405_RECOVERY_ERROR_PREFIX = 'STEP4_405_RECOVERY_LIMIT::';
 const STEP4_405_RECOVERY_LIMIT = 3;
@@ -3661,11 +3749,12 @@ function getAuthTimeoutErrorPageState(options = {}) {
   const detailMatched = AUTH_TIMEOUT_ERROR_DETAIL_PATTERN.test(text);
   const routeErrorMatched = AUTH_ROUTE_ERROR_PATTERN.test(text);
   const fetchFailedMatched = /failed\s+to\s+fetch|network\s+error|fetch\s+failed/i.test(text);
+  const serverErrorMatched = /server\s+error\s*500|internal\s+server\s+error|http\s*500/i.test(text);
   const maxCheckAttemptsBlocked = /max_check_attempts/i.test(text);
   const emailInUseBlocked = /email_in_use/i.test(text);
   const userAlreadyExistsBlocked = /user_already_exists/i.test(text);
 
-  if (!titleMatched && !detailMatched && !routeErrorMatched && !fetchFailedMatched && !maxCheckAttemptsBlocked && !emailInUseBlocked && !userAlreadyExistsBlocked) {
+  if (!titleMatched && !detailMatched && !routeErrorMatched && !fetchFailedMatched && !serverErrorMatched && !maxCheckAttemptsBlocked && !emailInUseBlocked && !userAlreadyExistsBlocked) {
     return null;
   }
 
@@ -3678,6 +3767,7 @@ function getAuthTimeoutErrorPageState(options = {}) {
     detailMatched,
     routeErrorMatched,
     fetchFailedMatched,
+    serverErrorMatched,
     maxCheckAttemptsBlocked,
     emailInUseBlocked,
     userAlreadyExistsBlocked,
@@ -4009,6 +4099,8 @@ function getLoginEmailInput() {
 function getLoginPhoneInput() {
   const phonePage = isLoginPhoneUsernameKind() || isLoginPhoneEntryPageText();
   const selector = [
+    'form[action*="/log-in" i][action*="usernameKind=phone_number" i] input[type="tel"]:not([maxlength="6"])',
+    'form[action*="/log-in" i][action*="usernameKind=phone_number" i] input[autocomplete="tel"]',
     `${JP_LOGIN_FORM_SELECTOR} form input[type="tel"]:not([maxlength="6"])`,
     `${JP_LOGIN_FORM_SELECTOR} form input[name="phoneNumber"]:not([type="hidden"])`,
     `${JP_LOGIN_FORM_SELECTOR} form input[name="phone_number"]:not([type="hidden"])`,
@@ -4206,6 +4298,8 @@ function findLoginPhoneCountryOptionByNumber(select, phoneNumber) {
 
 async function selectCountryForPhoneInput(phoneInput, phoneNumber = '', countryLabel = '', options = {}) {
   const visibleStep = Math.floor(Number(options?.visibleStep) || 0) || 7;
+  const targetOption = findSignupPhoneCountryOptionByLabel(phoneInput, countryLabel)
+    || findSignupPhoneCountryOptionByPhoneNumber(phoneInput, phoneNumber);
   const selection = await ensureSignupPhoneCountrySelected(phoneInput, {
     countryLabel,
     phoneNumber,
@@ -4215,6 +4309,18 @@ async function selectCountryForPhoneInput(phoneInput, phoneNumber = '', countryL
   const displayedDialCode = getSignupPhoneDisplayedDialCode(phoneInput);
 
   if (selection.hasCountryControl && targetDialCode) {
+    const selectedOptionMatchesTarget = Boolean(
+      targetOption
+      && selectedOption
+      && isSameSignupCountryOption(selectedOption, targetOption)
+    );
+    if (selectedOptionMatchesTarget && (!displayedDialCode || displayedDialCode !== targetDialCode)) {
+      log(`步骤 ${visibleStep}：国家下拉隐藏值已切到目标区号 +${targetDialCode}，但可见文案尚未同步；将强制按完整手机号 ${phoneNumber} 提交。`, 'warn', {
+        step: visibleStep,
+        stepKey: 'oauth-login',
+      });
+      return targetDialCode;
+    }
     if (!selection.matched || (displayedDialCode && displayedDialCode !== targetDialCode)) {
       const currentCountryText = getSignupPhoneCountryButtonText(phoneInput) || displayedDialCode || '未知';
       const targetLabel = `目标区号 +${targetDialCode}（号码 ${phoneNumber}${countryLabel ? `，国家 ${countryLabel}` : ''}）`;
@@ -4254,11 +4360,19 @@ function findLoginEntryTrigger() {
 }
 
 function findLoginPhoneEntryTrigger() {
-  const target = findJpLoginFormPhoneEntryTrigger();
-  if (!target) return null;
-  const text = getActionText(target);
-  if (!text || LOGIN_CODE_ONLY_ACTION_PATTERN.test(text) || LOGIN_EXTERNAL_IDP_PATTERN.test(text)) return null;
-  return text === JP_PHONE_ENTRY_ACTION_TEXT ? target : null;
+  const exactTarget = findJpLoginFormPhoneEntryTrigger();
+  if (exactTarget) return exactTarget;
+
+  const candidates = Array.from(document.querySelectorAll(
+    'button[data-dd-action-name="Continue with phone"], button[type="button"]'
+  )).filter((el) => isVisibleElement(el) && isActionEnabled(el));
+
+  return candidates.find((el) => {
+    const text = getActionText(el);
+    if (!text || LOGIN_CODE_ONLY_ACTION_PATTERN.test(text) || LOGIN_EXTERNAL_IDP_PATTERN.test(text)) return false;
+    return el.getAttribute?.('data-dd-action-name') === 'Continue with phone'
+      || text === JP_PHONE_ENTRY_ACTION_TEXT;
+  }) || null;
 }
 
 function findLoginMoreOptionsTrigger() {
@@ -4270,6 +4384,44 @@ function findLoginMoreOptionsTrigger() {
     const text = getActionText(el);
     if (!text || LOGIN_EXTERNAL_IDP_PATTERN.test(text)) return false;
     return LOGIN_MORE_OPTIONS_PATTERN.test(text);
+  }) || null;
+}
+
+function isChooseAccountPageReady() {
+  return location.pathname === '/choose-an-account'
+    || Boolean(document.querySelector('form[action="/choose-an-account"]'));
+}
+
+function getChooseAccountSessionButtons() {
+  return Array.from(document.querySelectorAll(
+    'form[action="/choose-an-account"] button[name="session_id"], button[name="session_id"][data-dd-action-name="Select existing session"]'
+  )).filter((el) => isVisibleElement(el) && isActionEnabled(el));
+}
+
+function getChooseAccountSessionIdentifierText(button) {
+  return [
+    button?.textContent,
+    button?.getAttribute?.('aria-label'),
+    button?.getAttribute?.('title'),
+  ]
+    .filter(Boolean)
+    .join(' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function findChooseAccountSessionButton(phoneNumber = '') {
+  const buttons = getChooseAccountSessionButtons();
+  const expectedDigits = normalizePhoneDigits(phoneNumber);
+  if (!expectedDigits) {
+    return buttons.length === 1 ? buttons[0] : null;
+  }
+
+  return buttons.find((button) => {
+    const text = getChooseAccountSessionIdentifierText(button);
+    return Array.from(text.matchAll(/\+?\d[\d\s().-]{5,}\d/g))
+      .map((match) => normalizePhoneDigits(match[0]))
+      .some((digits) => digits === expectedDigits);
   }) || null;
 }
 
@@ -4290,6 +4442,8 @@ function inspectLoginAuthState() {
   const phoneVerificationPage = isPhoneVerificationPageReady();
   const consentReady = isStep8Ready();
   const oauthConsentPage = isOAuthConsentPage();
+  const chooseAccountPage = isChooseAccountPageReady();
+  const chooseAccountSessionButtons = chooseAccountPage ? getChooseAccountSessionButtons() : [];
   const baseState = {
     state: 'unknown',
     url: location.href,
@@ -4316,12 +4470,21 @@ function inspectLoginAuthState() {
     phoneVerificationPage,
     oauthConsentPage,
     consentReady,
+    chooseAccountPage,
+    chooseAccountSessionButtons,
   };
 
   if (retryState) {
     return {
       ...baseState,
       state: 'login_timeout_error_page',
+    };
+  }
+
+  if (chooseAccountPage) {
+    return {
+      ...baseState,
+      state: 'choose_account_page',
     };
   }
 
@@ -4426,6 +4589,10 @@ function serializeLoginAuthState(snapshot) {
     phoneVerificationPage: Boolean(snapshot?.phoneVerificationPage),
     oauthConsentPage: Boolean(snapshot?.oauthConsentPage),
     consentReady: Boolean(snapshot?.consentReady),
+    chooseAccountPage: Boolean(snapshot?.chooseAccountPage),
+    chooseAccountSessionCount: Array.isArray(snapshot?.chooseAccountSessionButtons)
+      ? snapshot.chooseAccountSessionButtons.length
+      : 0,
   };
 }
 
@@ -4444,6 +4611,8 @@ function getLoginAuthStateLabel(snapshot) {
       return '手机验证码页';
     case 'login_timeout_error_page':
       return '登录超时报错页';
+    case 'choose_account_page':
+      return '选择已有账号页';
     case 'oauth_consent_page':
       return 'OAuth 授权页';
     case 'entry_page':
@@ -4609,6 +4778,10 @@ async function createStep6LoginTimeoutRecoveryTransition(reason, snapshot, messa
         via: `${via}_add_email`,
       }),
     };
+  }
+
+  if (resolvedSnapshot.state === 'choose_account_page') {
+    return { action: 'choose_account', snapshot: resolvedSnapshot };
   }
 
   if (resolvedSnapshot.state === 'password_page') {
@@ -5510,6 +5683,10 @@ async function resolveStep6PostSubmitSnapshot(snapshot, options = {}) {
     };
   }
 
+  if (normalizedSnapshot.state === 'choose_account_page') {
+    return { action: 'choose_account', snapshot: normalizedSnapshot };
+  }
+
   if (normalizedSnapshot.state === 'login_timeout_error_page') {
     const transition = await createStep6LoginTimeoutRecoveryTransition(
       timeoutRecoveryReason,
@@ -5536,6 +5713,9 @@ async function resolveStep6PostSubmitSnapshot(snapshot, options = {}) {
     }
     if (transition.action === 'email') {
       return { action: 'email', snapshot: transition.snapshot };
+    }
+    if (transition.action === 'choose_account') {
+      return { action: 'choose_account', snapshot: transition.snapshot };
     }
     return {
       action: 'recoverable',
@@ -5695,6 +5875,120 @@ async function waitForLoginEntryOpenTransition(timeout = 10000) {
   return snapshot;
 }
 
+async function waitForChooseAccountSelectionTransition(timeout = 15000) {
+  const start = Date.now();
+  let snapshot = normalizeStep6Snapshot(inspectLoginAuthState());
+
+  while (Date.now() - start < timeout) {
+    throwIfStopped();
+    snapshot = normalizeStep6Snapshot(inspectLoginAuthState());
+    if (snapshot.state !== 'unknown' && snapshot.state !== 'choose_account_page') {
+      return snapshot;
+    }
+    await sleep(250);
+  }
+
+  return snapshot;
+}
+
+async function waitForMatchingChooseAccountSessionButton(phoneNumber = '', timeout = 5000) {
+  const start = Date.now();
+  let button = findChooseAccountSessionButton(phoneNumber);
+
+  while (!button && Date.now() - start < timeout) {
+    throwIfStopped();
+    await sleep(200);
+    button = findChooseAccountSessionButton(phoneNumber);
+  }
+
+  return button;
+}
+
+async function continueStep6AfterChooseAccount(payload, snapshot) {
+  const visibleStep = Math.floor(Number(payload?.visibleStep) || 0) || 7;
+  const nextSnapshot = normalizeStep6Snapshot(snapshot || inspectLoginAuthState());
+
+  if (nextSnapshot.state === 'verification_page' || nextSnapshot.state === 'phone_verification_page') {
+    return finalizeStep6VerificationReady({
+      visibleStep,
+      loginVerificationRequestedAt: null,
+      via: 'choose_account_session_selected_verification_page',
+      allowPhoneVerificationPage: nextSnapshot.state === 'phone_verification_page',
+    });
+  }
+  if (nextSnapshot.state === 'oauth_consent_page') {
+    return createStep6OAuthConsentSuccessResult(nextSnapshot, {
+      via: 'choose_account_session_selected_oauth_consent_page',
+    });
+  }
+  if (nextSnapshot.state === 'add_email_page') {
+    return createStep6AddEmailSuccessResult(nextSnapshot, {
+      via: 'choose_account_session_selected_add_email_page',
+    });
+  }
+  if (nextSnapshot.state === 'phone_entry_page') {
+    return step6LoginFromPhonePage(payload, nextSnapshot);
+  }
+  if (nextSnapshot.state === 'password_page') {
+    return step6LoginFromPasswordPage(payload, nextSnapshot);
+  }
+  if (nextSnapshot.state === 'email_page') {
+    if (String(payload?.loginIdentifierType || '').trim() === 'phone' && payload?.phoneNumber) {
+      return switchFromEmailPageToPhoneLogin(payload, nextSnapshot);
+    }
+    return step6LoginFromEmailPage(payload, nextSnapshot);
+  }
+  if (nextSnapshot.state === 'entry_page') {
+    return step6OpenLoginEntry(payload, nextSnapshot);
+  }
+  if (nextSnapshot.state === 'login_timeout_error_page') {
+    const transition = await createStep6LoginTimeoutRecoveryTransition(
+      'login_timeout_after_choose_account',
+      nextSnapshot,
+      '选择已有账号后进入登录超时报错页。',
+      {
+        visibleStep,
+        allowPhoneVerificationPage: true,
+      }
+    );
+    if (transition.action === 'done') return transition.result;
+    if (transition.action === 'phone') return step6LoginFromPhonePage(payload, transition.snapshot);
+    if (transition.action === 'password') return step6LoginFromPasswordPage(payload, transition.snapshot);
+    if (transition.action === 'email') return step6LoginFromEmailPage(payload, transition.snapshot);
+  }
+
+  return createStep6RecoverableResult('choose_account_selection_stalled', nextSnapshot, {
+    message: `选择已有账号后仍未进入可继续处理的认证页面，当前停留在${getLoginAuthStateLabel(nextSnapshot)}。`,
+  });
+}
+
+async function step6ChooseExistingAccount(payload, snapshot) {
+  const performOperationWithDelay = typeof getOperationDelayRunner === 'function'
+    ? getOperationDelayRunner()
+    : async (metadata, operation) => {
+        const rootScope = typeof window !== 'undefined' ? window : globalThis;
+        const gate = rootScope?.CodexOperationDelay?.performOperationWithDelay;
+        return typeof gate === 'function' ? gate(metadata, operation) : operation();
+      };
+  const visibleStep = Math.floor(Number(payload?.visibleStep) || 0) || 7;
+  const currentSnapshot = normalizeStep6Snapshot(snapshot || inspectLoginAuthState());
+  const phoneNumber = String(payload?.phoneNumber || payload?.accountIdentifier || '').trim();
+  const sessionButton = await waitForMatchingChooseAccountSessionButton(phoneNumber);
+  if (!sessionButton) {
+    return createStep6RecoverableResult('missing_matching_choose_account_session', currentSnapshot, {
+      message: `当前选择账号页没有匹配手机号 ${phoneNumber || '未知'} 的可点击账号。`,
+    });
+  }
+
+  log(`检测到已有账号选择页，正在选择手机号 ${phoneNumber || '对应'} 的账号...`, 'info', { step: visibleStep, stepKey: 'oauth-login' });
+  await humanPause(350, 900);
+  await performOperationWithDelay({ stepKey: 'oauth-login', kind: 'click', label: 'choose-existing-account-session' }, async () => {
+    simulateClick(sessionButton);
+  });
+  log('已点击已有账号，正在等待认证页面继续...', 'info', { step: visibleStep, stepKey: 'oauth-login' });
+  return continueStep6AfterChooseAccount(payload, await waitForChooseAccountSelectionTransition());
+}
+
 async function waitForPhoneLoginEntrySwitchTransition(timeout = 10000) {
   const start = Date.now();
   let snapshot = normalizeStep6Snapshot(inspectLoginAuthState());
@@ -5769,6 +6063,9 @@ async function step6OpenLoginEntry(payload, snapshot) {
       via: 'entry_open_add_email_page',
     });
   }
+  if (nextSnapshot.state === 'choose_account_page') {
+    return step6ChooseExistingAccount(payload, nextSnapshot);
+  }
   if (nextSnapshot.state === 'login_timeout_error_page') {
     const transition = await createStep6LoginTimeoutRecoveryTransition(
       'login_timeout_after_entry_open',
@@ -5780,6 +6077,7 @@ async function step6OpenLoginEntry(payload, snapshot) {
     if (transition.action === 'phone') return step6LoginFromPhonePage(payload, transition.snapshot);
     if (transition.action === 'email') return step6LoginFromEmailPage(payload, transition.snapshot);
     if (transition.action === 'password') return step6LoginFromPasswordPage(payload, transition.snapshot);
+    if (transition.action === 'choose_account') return step6ChooseExistingAccount(payload, transition.snapshot);
     return transition.result;
   }
 
@@ -5831,6 +6129,9 @@ async function step6SwitchToOneTimeCodeLogin(payload, snapshot) {
   }
   if (result?.action === 'email') {
     return step6LoginFromEmailPage(payload, result.snapshot);
+  }
+  if (result?.action === 'choose_account') {
+    return step6ChooseExistingAccount(payload, result.snapshot);
   }
   return result;
 }
@@ -5949,6 +6250,9 @@ async function step6LoginFromPhonePage(payload, snapshot) {
   if (transition.action === 'email') {
     return step6LoginFromEmailPage(payload, transition.snapshot);
   }
+  if (transition.action === 'choose_account') {
+    return step6ChooseExistingAccount(payload, transition.snapshot);
+  }
 
   return createStep6RecoverableResult('phone_submit_unknown', normalizeStep6Snapshot(inspectLoginAuthState()), {
     message: '提交手机号后未得到可用的下一步状态。',
@@ -5989,12 +6293,37 @@ async function switchFromEmailPageToPhoneLogin(payload, snapshot) {
     });
   }
 
-  log(`步骤 ${visibleStep}：当前在邮箱入口，正在切换到手机号登录...`, 'info', { step: visibleStep, stepKey: 'oauth-login' });
-  await humanPause(350, 900);
-  await performOperationWithDelay({ stepKey: 'oauth-login', kind: 'click', label: 'switch-phone-login' }, async () => {
-    simulateClick(phoneEntryTrigger);
-  });
-  const nextSnapshot = normalizeStep6Snapshot(await waitForPhoneLoginEntrySwitchTransition(20000));
+  let nextSnapshot = currentSnapshot;
+  const maxSwitchAttempts = 2;
+  for (let attempt = 1; attempt <= maxSwitchAttempts; attempt += 1) {
+    log(`步骤 ${visibleStep}：当前在邮箱入口，正在切换到手机号登录...`, 'info', {
+      step: visibleStep,
+      stepKey: 'oauth-login',
+      attempt,
+      maxSwitchAttempts,
+    });
+    await humanPause(350, 900);
+    await performOperationWithDelay({ stepKey: 'oauth-login', kind: 'click', label: `switch-phone-login-${attempt}` }, async () => {
+      phoneEntryTrigger.scrollIntoView?.({ block: 'center', inline: 'center' });
+      simulateClick(phoneEntryTrigger);
+    });
+    nextSnapshot = normalizeStep6Snapshot(await waitForPhoneLoginEntrySwitchTransition(20000));
+    if (nextSnapshot.state !== 'email_page' && nextSnapshot.state !== 'entry_page' && nextSnapshot.state !== 'unknown') {
+      break;
+    }
+
+    const retryTrigger = nextSnapshot.phoneEntryTrigger || findLoginPhoneEntryTrigger();
+    if (attempt < maxSwitchAttempts && retryTrigger && isActionEnabled(retryTrigger)) {
+      log(`步骤 ${visibleStep}：点击手机号入口后仍停留在${getLoginAuthStateLabel(nextSnapshot)}，重新定位入口后再试一次。`, 'warn', {
+        step: visibleStep,
+        stepKey: 'oauth-login',
+      });
+      phoneEntryTrigger = retryTrigger;
+      await sleep(800);
+      continue;
+    }
+    break;
+  }
   if (nextSnapshot.state === 'phone_entry_page') {
     return step6LoginFromPhonePage(payload, nextSnapshot);
   }
@@ -6019,6 +6348,9 @@ async function switchFromEmailPageToPhoneLogin(payload, snapshot) {
       via: 'phone_entry_switch_add_email_page',
     });
   }
+  if (nextSnapshot.state === 'choose_account_page') {
+    return step6ChooseExistingAccount(payload, nextSnapshot);
+  }
   if (nextSnapshot.state === 'login_timeout_error_page') {
     const transition = await createStep6LoginTimeoutRecoveryTransition(
       'login_timeout_after_phone_entry_switch',
@@ -6033,6 +6365,7 @@ async function switchFromEmailPageToPhoneLogin(payload, snapshot) {
     if (transition.action === 'phone') return step6LoginFromPhonePage(payload, transition.snapshot);
     if (transition.action === 'password') return step6LoginFromPasswordPage(payload, transition.snapshot);
     if (transition.action === 'email') return step6LoginFromEmailPage(payload, transition.snapshot);
+    if (transition.action === 'choose_account') return step6ChooseExistingAccount(payload, transition.snapshot);
     return transition.result;
   }
 
@@ -6103,6 +6436,9 @@ async function step6LoginFromPasswordPage(payload, snapshot) {
     }
     if (transition.action === 'switch') {
       return step6SwitchToOneTimeCodeLogin(payload, transition.snapshot);
+    }
+    if (transition.action === 'choose_account') {
+      return step6ChooseExistingAccount(payload, transition.snapshot);
     }
 
     return createStep6RecoverableResult('password_submit_unknown', normalizeStep6Snapshot(inspectLoginAuthState()), {
@@ -6176,6 +6512,9 @@ async function step6LoginFromEmailPage(payload, snapshot) {
   if (transition.action === 'phone') {
     return step6LoginFromPhonePage(payload, transition.snapshot);
   }
+  if (transition.action === 'choose_account') {
+    return step6ChooseExistingAccount(payload, transition.snapshot);
+  }
 
   return createStep6RecoverableResult('email_submit_unknown', normalizeStep6Snapshot(inspectLoginAuthState()), {
     message: '提交邮箱后未得到可用的下一步状态。',
@@ -6216,6 +6555,10 @@ async function step6_login(payload) {
     });
   }
 
+  if (snapshot.state === 'choose_account_page') {
+    return step6ChooseExistingAccount(payload, snapshot);
+  }
+
   if (snapshot.state === 'login_timeout_error_page') {
     log('检测到登录超时报错页，先尝试恢复当前页面。', 'warn', { step: visibleStep, stepKey: 'oauth-login' });
     const transition = await createStep6LoginTimeoutRecoveryTransition(
@@ -6247,6 +6590,9 @@ async function step6_login(payload) {
     }
     if (transition.action === 'password') {
       return step6LoginFromPasswordPage(payload, transition.snapshot);
+    }
+    if (transition.action === 'choose_account') {
+      return step6ChooseExistingAccount(payload, transition.snapshot);
     }
     return transition.result;
   }
@@ -7347,4 +7693,17 @@ async function step5_fillNameBirthday(payload) {
     cleanupNavigationReporter();
     throw error;
   }
+}
+
+if (typeof globalThis !== 'undefined' && globalThis.__SIGNUP_PAGE_TEST_HOOKS__) {
+  Object.assign(globalThis.__SIGNUP_PAGE_TEST_HOOKS__, {
+    findChooseAccountSessionButton,
+    findLoginPhoneEntryTrigger,
+    getChooseAccountSessionButtons,
+    getVerificationCodeTarget,
+    inspectLoginAuthState,
+    isVerificationCodeCandidateInput,
+    isChooseAccountPageReady,
+    serializeLoginAuthState,
+  });
 }

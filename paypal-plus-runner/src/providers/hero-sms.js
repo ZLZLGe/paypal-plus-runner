@@ -150,6 +150,8 @@ function resolveHeroSmsConfig(settings = {}, deps = {}) {
     maxPrice: String(cappedMaxPrice),
     countryPool: normalizeCountryPool(source.heroSmsCountryPool || source.countryPool, HERO_SMS_DEFAULT_COUNTRY_POOL),
     requestTimeoutMs: Math.max(1000, Number(source.requestTimeoutMs || deps.requestTimeoutMs || 15000)),
+    numberRequestAttempts: Math.max(1, Math.floor(Number(source.heroSmsNumberRequestAttempts || source.numberRequestAttempts || 1))),
+    numberRequestRetryDelayMs: Math.max(0, Math.floor(Number(source.heroSmsNumberRequestRetryDelayMs || source.numberRequestRetryDelayMs || 5000))),
     fetchImpl: deps.fetchImpl || globalThis.fetch?.bind(globalThis),
   };
 }
@@ -430,48 +432,53 @@ async function resolveHeroSmsCountryPriceCandidates(settings = {}, config = reso
 export async function requestHeroSmsActivation(settings = {}, deps = {}) {
   const config = resolveHeroSmsConfig(settings, deps);
   const actions = ["getNumberV2", "getNumber"];
-  const priceAttempts = await resolveHeroSmsCountryPriceCandidates(settings, config, deps);
   const failures = [];
 
-  for (const candidate of priceAttempts) {
-    for (const action of actions) {
-      try {
-        const query = {
-          action,
-          service: config.serviceCode,
-          country: candidate.countryId,
-        };
-        if (config.minPrice) query.minPrice = config.minPrice;
-        query.maxPrice = candidate.price;
-        query.fixedPrice = "true";
-        const payload = await fetchHeroSmsPayload(settings, query, `HeroSMS ${action}`, deps);
-        const activation = parseHeroSmsActivation(payload, {
-          serviceCode: config.serviceCode,
-          countryId: candidate.countryId,
-          countryLabel: candidate.countryLabel,
-          statusAction: action === "getNumberV2" ? "getStatusV2" : "getStatus",
-        });
-        if (activation) return { ...activation, price: candidate.price };
-        const text = describeHeroSmsPayload(payload);
-        if (action === "getNumberV2" && /BAD_ACTION/i.test(text)) {
-          failures.push(`${candidate.countryLabel}@${candidate.price}:${text || "getNumberV2 unavailable"}`);
-          continue;
+  for (let requestAttempt = 1; requestAttempt <= config.numberRequestAttempts; requestAttempt += 1) {
+    const priceAttempts = await resolveHeroSmsCountryPriceCandidates(settings, config, deps);
+    for (const candidate of priceAttempts) {
+      for (const action of actions) {
+        try {
+          const query = {
+            action,
+            service: config.serviceCode,
+            country: candidate.countryId,
+          };
+          if (config.minPrice) query.minPrice = config.minPrice;
+          query.maxPrice = candidate.price;
+          query.fixedPrice = "true";
+          const payload = await fetchHeroSmsPayload(settings, query, `HeroSMS ${action}`, deps);
+          const activation = parseHeroSmsActivation(payload, {
+            serviceCode: config.serviceCode,
+            countryId: candidate.countryId,
+            countryLabel: candidate.countryLabel,
+            statusAction: action === "getNumberV2" ? "getStatusV2" : "getStatus",
+          });
+          if (activation) return { ...activation, price: candidate.price };
+          const text = describeHeroSmsPayload(payload);
+          if (action === "getNumberV2" && /BAD_ACTION/i.test(text)) {
+            failures.push(`${candidate.countryLabel}@${candidate.price}:${text || "getNumberV2 unavailable"}`);
+            continue;
+          }
+          if (isTerminalPayload(text) && !isNoNumbersPayload(text)) {
+            throw new Error(`HeroSMS ${action}失败：${text}`);
+          }
+          failures.push(`${candidate.countryLabel}@${candidate.price}:${text || "空响应"}`);
+        } catch (error) {
+          const payloadOrMessage = error?.payload || error?.message;
+          if (action === "getNumberV2" && /BAD_ACTION/i.test(describeHeroSmsPayload(payloadOrMessage))) {
+            failures.push(`${candidate.countryLabel}@${candidate.price}:${describeHeroSmsPayload(payloadOrMessage) || "getNumberV2 unavailable"}`);
+            continue;
+          }
+          if (isTerminalPayload(payloadOrMessage) && !isNoNumbersPayload(payloadOrMessage)) {
+            throw new Error(`HeroSMS 获取手机号失败：${describeHeroSmsPayload(payloadOrMessage) || "未知错误"}`);
+          }
+          failures.push(`${candidate.countryLabel}@${candidate.price}:${describeHeroSmsPayload(payloadOrMessage) || error?.message || "未知错误"}`);
         }
-        if (isTerminalPayload(text) && !isNoNumbersPayload(text)) {
-          throw new Error(`HeroSMS ${action}失败：${text}`);
-        }
-        failures.push(`${candidate.countryLabel}@${candidate.price}:${text || "空响应"}`);
-      } catch (error) {
-        const payloadOrMessage = error?.payload || error?.message;
-        if (action === "getNumberV2" && /BAD_ACTION/i.test(describeHeroSmsPayload(payloadOrMessage))) {
-          failures.push(`${candidate.countryLabel}@${candidate.price}:${describeHeroSmsPayload(payloadOrMessage) || "getNumberV2 unavailable"}`);
-          continue;
-        }
-        if (isTerminalPayload(payloadOrMessage) && !isNoNumbersPayload(payloadOrMessage)) {
-          throw new Error(`HeroSMS 获取手机号失败：${describeHeroSmsPayload(payloadOrMessage) || "未知错误"}`);
-        }
-        failures.push(`${candidate.countryLabel}@${candidate.price}:${describeHeroSmsPayload(payloadOrMessage) || error?.message || "未知错误"}`);
       }
+    }
+    if (requestAttempt < config.numberRequestAttempts && config.numberRequestRetryDelayMs > 0) {
+      await sleep(config.numberRequestRetryDelayMs);
     }
   }
 

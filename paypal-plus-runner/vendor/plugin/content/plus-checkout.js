@@ -28,6 +28,7 @@ const HOSTED_OPENAI_CITY_SELECTOR = 'input#billingLocality[name="billingLocality
 const HOSTED_OPENAI_POSTAL_CODE_SELECTOR = 'input#billingPostalCode[name="billingPostalCode"]';
 const HOSTED_OPENAI_REGION_SELECT_SELECTOR = 'select#billingAdministrativeArea[name="billingAdministrativeArea"]';
 const HOSTED_OPENAI_TERMS_CHECKBOX_SELECTOR = 'input#termsOfServiceConsentCheckbox[name="termsOfServiceConsentCheckbox"][type="checkbox"]';
+const HOSTED_OPENAI_LOADING_CONTAINER_SELECTOR = '.LOADING-container:not(.is-hidden)';
 const HOSTED_OPENAI_SUBMIT_BUTTON_SELECTORS = [
   'button[data-testid="hosted-payment-submit-button"][type="submit"]',
   'button[data-testid="submit-button"][type="submit"]',
@@ -539,6 +540,74 @@ function getVisibleHostedOpenAiSubmitButton() {
   return button && isVisibleElement(button) && isEnabledControl(button) ? button : null;
 }
 
+function hasHostedOpenAiRealCheckoutSurface() {
+  return Boolean(
+    findHostedOpenAiPayPalButton()
+    || findHostedOpenAiPayPalItem()
+    || findHostedOpenAiPayPalRadio()
+    || findHostedOpenAiSubmitButton()
+    || document.querySelector(HOSTED_OPENAI_EMAIL_SELECTOR)
+    || hasHostedOpenAiExactAddressFields()
+    || hasHostedOpenAiVerificationPopup()
+  );
+}
+
+function getHostedOpenAiSurfaceState() {
+  const realSurface = hasHostedOpenAiRealCheckoutSurface();
+  const loading = (() => {
+    if (!isHostedOpenAiCheckoutPage() || realSurface) {
+      return false;
+    }
+    const loadingContainer = document.querySelector(HOSTED_OPENAI_LOADING_CONTAINER_SELECTOR);
+    if (loadingContainer && isVisibleElement(loadingContainer)) {
+      return true;
+    }
+    const root = document.getElementById('root');
+    return Boolean(root && normalizeText(root.textContent || '') === '');
+  })();
+  return {
+    ready: realSurface,
+    loading,
+    reason: realSurface
+      ? 'hosted_checkout_real_surface'
+      : (loading ? 'hosted_checkout_loading_surface' : 'hosted_checkout_surface_not_ready'),
+  };
+}
+
+function isHostedOpenAiLoadingSurface() {
+  return getHostedOpenAiSurfaceState().loading;
+}
+
+async function waitForHostedOpenAiReadySurface(timeoutMs = 180000, stableMs = 2000) {
+  const startedAt = Date.now();
+  let readySince = 0;
+  let lastState = getHostedOpenAiSurfaceState();
+  while (Date.now() - startedAt < timeoutMs) {
+    throwIfStopped();
+    lastState = getHostedOpenAiSurfaceState();
+    if (lastState.ready) {
+      if (!readySince) {
+        readySince = Date.now();
+      }
+      if (Date.now() - readySince >= stableMs) {
+        return {
+          ...lastState,
+          stableMs,
+        };
+      }
+    } else {
+      readySince = 0;
+    }
+    await sleep(1000);
+  }
+  return {
+    ...lastState,
+    ready: false,
+    timedOut: true,
+    timeoutMs,
+  };
+}
+
 function buildHostedOpenAiPayPalUnavailableError(reason = 'missing_exact_paypal_button') {
   const diagnostics = getPayPalDiagnostics(reason);
   const policy = diagnostics.stripeExpressCheckoutPaypalPolicy || {};
@@ -584,6 +653,19 @@ async function runHostedOpenAiCheckoutStep(payload = {}) {
   }
 
   await sleep(2000);
+  const readyTimeoutMs = Math.max(30000, Math.floor(Number(payload.readyTimeoutMs) || 180000));
+  const readyStableMs = Math.max(0, Math.floor(Number(payload.readyStableMs) || 2000));
+  const readySurface = await waitForHostedOpenAiReadySurface(readyTimeoutMs, readyStableMs);
+  if (!readySurface.ready) {
+    return {
+      clicked: false,
+      loading: true,
+      reason: readySurface.reason || 'hosted_checkout_surface_not_ready',
+      surfaceState: readySurface,
+      diagnostics: getPayPalDiagnostics(readySurface.reason || 'hosted_checkout_surface_not_ready'),
+    };
+  }
+
   const paypalSelection = await selectHostedOpenAiPayPalExact();
   if (!paypalSelection.selected) {
     const diagnostics = writePayPalDiagnostics('hosted checkout 精确 PayPal 节点未能选中，停止提交', 'error');
@@ -2360,6 +2442,8 @@ async function inspectPlusCheckoutState(options = {}) {
     url: location.href,
     readyState: document.readyState,
     hostedOpenAiPage: isHostedOpenAiCheckoutPage(),
+    hostedOpenAiLoading: isHostedOpenAiLoadingSurface(),
+    hostedOpenAiRealSurface: hasHostedOpenAiRealCheckoutSurface(),
     hostedVerificationVisible: hasHostedOpenAiVerificationPopup(),
     hostedPayPalButtonFound: Boolean(findHostedOpenAiPayPalButton()),
     hostedPayPalButtonVisible: Boolean(getVisibleHostedOpenAiPayPalButton()),

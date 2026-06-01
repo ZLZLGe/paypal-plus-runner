@@ -189,6 +189,38 @@ assert.equal(extractHeroSmsCode("STATUS_WAIT_CODE"), "");
 }
 
 {
+  const requests = [];
+  const activation = await requestHeroSmsActivation({
+    openaiPhone: {
+      provider: "hero-sms",
+      heroSmsApiKey: "test-key",
+      heroSmsCountryPool: "151:Chile",
+      heroSmsServiceCode: "dr",
+      heroSmsMaxPrice: "0.07",
+      heroSmsNumberRequestAttempts: 2,
+      heroSmsNumberRequestRetryDelayMs: 1,
+      requestTimeoutMs: 5000,
+    },
+  }, {
+    fetchImpl: async (url) => {
+      const parsed = new URL(url);
+      requests.push(parsed);
+      const action = parsed.searchParams.get("action");
+      if (action === "getPrices") {
+        return new Response(JSON.stringify({ 151: { dr: { cost: 0.03, physicalCount: 1 } } }));
+      }
+      const getNumberCalls = requests.filter((item) => item.searchParams.get("action") === "getNumber").length;
+      if (action === "getNumberV2") return new Response("BAD_ACTION");
+      return new Response(getNumberCalls === 1 ? "NO_NUMBERS" : "ACCESS_NUMBER:retry-ok:+56912345678");
+    },
+  });
+  assert.equal(activation.activationId, "retry-ok");
+  assert.equal(activation.countryId, 151);
+  assert.equal(requests.filter((url) => url.searchParams.get("action") === "getPrices").length, 2);
+  assert.equal(requests.filter((url) => url.searchParams.get("action") === "getNumber").length, 2);
+}
+
+{
   const activations = await fetchHeroSmsActiveActivations({
     openaiPhone: {
       heroSmsApiKey: "test-key",

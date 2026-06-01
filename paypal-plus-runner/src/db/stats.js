@@ -3,6 +3,7 @@ export function getDatabaseStats(db) {
   const all = (sql, params = []) => db.prepare(sql).all(...params);
   return {
     outlookEmails: all("SELECT status, COUNT(1) AS count FROM outlook_emails GROUP BY status ORDER BY status"),
+    gptPhoneAccounts: all("SELECT lifecycle_status, lease_status, COUNT(1) AS count FROM gpt_phone_accounts GROUP BY lifecycle_status, lease_status ORDER BY lifecycle_status, lease_status"),
     paypalPhones: all("SELECT status, COUNT(1) AS count, SUM(used_count) AS usedCount FROM paypal_phone_pool GROUP BY status ORDER BY status"),
     plusAccounts: one("SELECT COUNT(1) AS count FROM plus_accounts").count,
     openaiPhoneActivations: all("SELECT status, COUNT(1) AS count FROM openai_phone_activations GROUP BY status ORDER BY status"),

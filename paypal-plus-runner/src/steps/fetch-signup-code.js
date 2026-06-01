@@ -1,6 +1,7 @@
 import { injectSignupFlow, dispatchChromeRuntimeMessage } from "../browser/inject.js";
 import { pollOpenAiEmailCode } from "../providers/ms-oauth2api-next-mail.js";
 import { detectLoggedInChatgpt } from "./signup-state.js";
+import { buildSignupProfilePayload } from "./signup-profile.js";
 import { RunnerError } from "../utils/errors.js";
 import { directSubmitSignupEmail, openSignupEmailEntry } from "./submit-signup-email.js";
 
@@ -239,11 +240,7 @@ export async function fetchSignupCodeStep(context) {
         payload: {
           visibleStep: 4,
           code,
-          signupProfile: {
-            firstName: context.checkoutProfile.guest.firstName,
-            lastName: context.checkoutProfile.guest.lastName,
-            age: Number(context.config.runner?.signupAge || 25),
-          },
+          signupProfile: buildSignupProfilePayload(context),
         },
       }, {
         onRetry: async () => ensureSignupRuntime(context),

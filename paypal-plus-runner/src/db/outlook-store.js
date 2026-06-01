@@ -56,16 +56,31 @@ export function importOutlookFile(db, filePath) {
   return { imported, skipped, errors };
 }
 
-export function countAvailableOutlook(db) {
-  return Number(db.prepare("SELECT COUNT(1) AS c FROM outlook_emails WHERE status = 'new'").get().c || 0);
+function leaseExpiresExpr(leaseMinutes = 30) {
+  const minutes = Math.max(1, Number.parseInt(String(leaseMinutes), 10) || 30);
+  return `datetime('now', '+${minutes} minutes')`;
 }
 
-export function leaseNextOutlookEmail(db, { maxAttempts = 5 } = {}) {
+export function countAvailableOutlook(db) {
+  return Number(db.prepare(`
+    SELECT COUNT(1) AS c
+    FROM outlook_emails
+    WHERE status = 'new'
+       OR (status IN ('leased', 'running') AND lease_expires_at <> '' AND lease_expires_at < CURRENT_TIMESTAMP)
+  `).get().c || 0);
+}
+
+export function leaseNextOutlookEmail(db, { maxAttempts = 5, workerId = "", runId = "", leaseMinutes = 30 } = {}) {
+  const expiresExpr = leaseExpiresExpr(leaseMinutes);
   db.exec("BEGIN IMMEDIATE");
   try {
     const row = db.prepare(`
       SELECT * FROM outlook_emails
-      WHERE status = 'new' AND attempt_count < ?
+      WHERE (
+          status = 'new'
+          OR (status IN ('leased', 'running') AND lease_expires_at <> '' AND lease_expires_at < CURRENT_TIMESTAMP)
+        )
+        AND attempt_count < ?
       ORDER BY id ASC
       LIMIT 1
     `).get(maxAttempts);
@@ -76,11 +91,14 @@ export function leaseNextOutlookEmail(db, { maxAttempts = 5 } = {}) {
     db.prepare(`
       UPDATE outlook_emails
       SET status = 'leased',
+          leased_by = ?,
+          current_run_id = ?,
           leased_at = ?,
+          lease_expires_at = ${expiresExpr},
           attempt_count = attempt_count + 1,
           updated_at = ?
       WHERE id = ?
-    `).run(utcNow(), utcNow(), row.id);
+    `).run(workerId, runId, utcNow(), utcNow(), row.id);
     const updated = db.prepare("SELECT * FROM outlook_emails WHERE id = ?").get(row.id);
     db.exec("COMMIT");
     return updated;
@@ -94,29 +112,59 @@ export function markOutlookRunning(db, id) {
   db.prepare("UPDATE outlook_emails SET status = 'running', updated_at = ? WHERE id = ?").run(utcNow(), id);
 }
 
-export function releaseOutlookEmail(db, id, { error = "", decrementAttempt = true } = {}) {
+export function releaseOutlookEmail(db, id, { error = "", decrementAttempt = true, runId = "" } = {}) {
   const row = db.prepare("SELECT attempt_count FROM outlook_emails WHERE id = ?").get(id);
   const attempts = Math.max(0, Number(row?.attempt_count || 0) - (decrementAttempt ? 1 : 0));
   db.prepare(`
     UPDATE outlook_emails
     SET status = 'new',
         attempt_count = ?,
+        leased_by = '',
+        current_run_id = '',
         leased_at = '',
+        lease_expires_at = '',
         last_error = ?,
         updated_at = ?
     WHERE id = ?
-  `).run(attempts, String(error || "").slice(0, 1000), utcNow(), id);
+      AND (? = '' OR current_run_id = ?)
+  `).run(attempts, String(error || "").slice(0, 1000), utcNow(), id, runId, runId);
+}
+
+export function markOutlookBound(db, id, { gptPhoneAccountId = null, signupPhoneNumber = "" } = {}) {
+  db.prepare(`
+    UPDATE outlook_emails
+    SET status = 'bound',
+        bound_gpt_phone_account_id = COALESCE(?, bound_gpt_phone_account_id),
+        bound_signup_phone_number = CASE WHEN ? <> '' THEN ? ELSE bound_signup_phone_number END,
+        bound_at = CASE WHEN bound_at = '' THEN ? ELSE bound_at END,
+        leased_by = '',
+        current_run_id = '',
+        leased_at = '',
+        lease_expires_at = '',
+        last_error = '',
+        updated_at = ?
+    WHERE id = ?
+  `).run(gptPhoneAccountId, signupPhoneNumber, signupPhoneNumber, utcNow(), utcNow(), id);
 }
 
 export function markOutlookPlusDone(db, id) {
-  db.prepare("UPDATE outlook_emails SET status = 'plus_done', last_error = '', updated_at = ? WHERE id = ?").run(utcNow(), id);
+  markOutlookBound(db, id);
 }
 
 export function markOutlookFailure(db, id, { retryable = true, error = "", maxAttempts = 5 } = {}) {
   const row = db.prepare("SELECT attempt_count FROM outlook_emails WHERE id = ?").get(id);
   const attempts = Number(row?.attempt_count || 0);
   const status = retryable && attempts < maxAttempts ? "new" : "failed";
-  db.prepare("UPDATE outlook_emails SET status = ?, last_error = ?, updated_at = ? WHERE id = ?")
-    .run(status, String(error || "").slice(0, 1000), utcNow(), id);
+  db.prepare(`
+    UPDATE outlook_emails
+    SET status = ?,
+        leased_by = '',
+        current_run_id = '',
+        leased_at = '',
+        lease_expires_at = '',
+        last_error = ?,
+        updated_at = ?
+    WHERE id = ?
+  `).run(status, String(error || "").slice(0, 1000), utcNow(), id);
   return status;
 }

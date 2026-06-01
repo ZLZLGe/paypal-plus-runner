@@ -136,8 +136,25 @@ export function buildPaypalRiskBlockedError(state = {}, stage = {}) {
   const host = state.host || stage.host || "";
   const path = state.path || stage.path || "";
   const reason = state.riskBlockReason || state.reason || "paypal_datadome_or_empty_approval";
-  return new RunnerError(`PAYPAL_RISK_BLOCKED::PayPal risk/DataDome block detected at ${host}${path}; ${reason}`, {
+  const error = new RunnerError(`PAYPAL_RISK_BLOCKED::PayPal risk/DataDome block detected at ${host}${path}; ${reason}`, {
     code: "PAYPAL_RISK_BLOCKED",
     retryable: true,
   });
+  error.riskState = state;
+  error.pageStage = stage;
+  return error;
+}
+
+export function buildPaypalRiskObservedError(state = {}, stage = {}) {
+  const host = state.host || stage.host || "";
+  const path = state.path || stage.path || "";
+  const reason = state.riskBlockReason || state.reason || "paypal_datadome_or_empty_approval";
+  const error = new RunnerError(`PAYPAL_RISK_OBSERVED::PayPal risk/DataDome observed at ${host}${path}; ${reason}`, {
+    code: "PAYPAL_RISK_OBSERVED",
+    retryable: false,
+  });
+  error.riskState = state;
+  error.pageStage = stage;
+  error.preserveBrowserWindow = true;
+  return error;
 }

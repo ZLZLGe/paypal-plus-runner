@@ -2,6 +2,8 @@
 
 Non-extension runner for the PayPal Plus flow. The current implementation contains the database/importers, PayPal phone leasing, Roxy multi-window/CDP runtime, checkout profile generation, checkout conversion providers, and a PayPal Hosted Checkout state machine that reuses the original plugin PayPal content script.
 
+完整交接和运行说明见 [`docs/USAGE.md`](docs/USAGE.md)。
+
 ## Commands
 
 ```bash

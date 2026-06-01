@@ -4,8 +4,6 @@ const state = {
   summary: null,
   runs: [],
   selectedRunId: "",
-  filter: "all",
-  eventCount: 0,
 };
 
 async function getJson(url) {
@@ -25,6 +23,12 @@ function escapeHtml(value) {
 
 function totalCount(rows = []) {
   return rows.reduce((total, row) => total + Number(row.count || 0), 0);
+}
+
+function countBy(rows = [], key, value) {
+  return rows
+    .filter((row) => String(row[key] || "") === value)
+    .reduce((total, row) => total + Number(row.count || 0), 0);
 }
 
 function shortText(value, max = 36) {
@@ -47,22 +51,35 @@ function formatTime(value) {
 }
 
 function statusClass(status) {
-  return ["done", "failed", "running"].includes(status) ? status : "neutral";
+  return ["done", "failed", "running", "available", "active", "new"].includes(status) ? status : "neutral";
 }
 
 function statusLabel(status) {
   const labels = {
-    all: "全部",
+    active: "可用",
+    available: "可租",
+    bound: "已绑定",
+    cpa_done: "CPA 完成",
+    disabled: "禁用",
     done: "完成",
+    email_bound: "邮箱已绑",
     failed: "失败",
+    finished: "完成",
+    hold_no_sms_access: "无短信权限",
+    leased: "租用中",
+    new: "可用",
+    plus_done: "Plus 完成",
+    registered: "已注册",
+    requested: "已请求",
     running: "运行中",
+    signup_pending: "注册中",
   };
   return labels[status] || status || "-";
 }
 
 function chip(label, value, className = "neutral") {
   const text = value === undefined ? label : `${label}: ${value}`;
-  return `<span class="chip ${className}" title="${escapeHtml(text)}"><span>${escapeHtml(shortText(text, 28))}</span></span>`;
+  return `<span class="chip ${className}" title="${escapeHtml(text)}"><span>${escapeHtml(shortText(text, 30))}</span></span>`;
 }
 
 function metric({ label, value, note = "", chips = [] }) {
@@ -80,44 +97,64 @@ function metric({ label, value, note = "", chips = [] }) {
   `;
 }
 
-function resourceChips(rows = []) {
-  if (!rows.length) return [chip("空", undefined, "neutral")];
-  return rows.map((row) => chip(row.status || "-", row.count || 0, statusClass(row.status)));
+function resourceChipText(row = {}) {
+  if (row.lifecycle_status) {
+    return row.lease_status
+      ? `${statusLabel(row.lifecycle_status)}/${statusLabel(row.lease_status)}`
+      : statusLabel(row.lifecycle_status);
+  }
+  return statusLabel(row.status || "-");
 }
 
-function countRunsByStatus(status) {
-  return state.runs.filter((run) => run.status === status).length;
+function resourceChipClass(row = {}) {
+  return statusClass(row.lease_status || row.status || row.lifecycle_status || "");
+}
+
+function resourceChips(rows = []) {
+  if (!rows.length) return [chip("空", undefined, "neutral")];
+  return rows.map((row) => chip(resourceChipText(row), row.count || 0, resourceChipClass(row)));
+}
+
+function accountIdentity(run = {}) {
+  return [run.accountIdentifierType, run.accountIdentifier].filter(Boolean).join(" ");
 }
 
 function renderSummary(data = {}) {
-  const runHistory = data.runHistory || [];
-  const runFailed = runHistory.find((row) => row.status === "failed")?.count ?? countRunsByStatus("failed");
-  const runDone = runHistory.find((row) => row.status === "done")?.count ?? countRunsByStatus("done");
+  const gptRows = data.gptPhoneAccounts || [];
+  const outlookRows = data.outlookEmails || [];
+  const paypalRows = data.paypalPhones || [];
+  const gptAvailable = gptRows
+    .filter((row) => ["registered", "plus_done", "email_bound"].includes(String(row.lifecycle_status || "")))
+    .filter((row) => String(row.lease_status || "") === "available")
+    .reduce((total, row) => total + Number(row.count || 0), 0);
+  const gptPlusAccounts = gptRows
+    .filter((row) => ["plus_done", "email_bound", "cpa_done"].includes(String(row.lifecycle_status || "")))
+    .reduce((total, row) => total + Number(row.count || 0), 0);
   $("#summary").innerHTML = [
     metric({
+      label: "Running Accounts",
+      value: state.runs.length,
+      note: "当前正在执行的 run",
+    }),
+    metric({
+      label: "GPT Phone Accounts",
+      value: totalCount(gptRows),
+      note: `可继续账号 ${gptAvailable}`,
+    }),
+    metric({
+      label: "Outlook Available",
+      value: countBy(outlookRows, "status", "new"),
+      note: "可租辅助邮箱",
+    }),
+    metric({
+      label: "PayPal Phone Active",
+      value: countBy(paypalRows, "status", "active"),
+      note: "可用日区手机号",
+    }),
+    metric({
       label: "Plus Accounts",
-      value: data.plusAccounts || 0,
-      note: "已落库账号",
-    }),
-    metric({
-      label: "Recent Running",
-      value: countRunsByStatus("running"),
-      note: "当前列表中的运行账号",
-    }),
-    metric({
-      label: "Run Done",
-      value: runDone || 0,
-      note: "历史完成",
-    }),
-    metric({
-      label: "Run Failed",
-      value: runFailed || 0,
-      note: "历史失败",
-    }),
-    metric({
-      label: "Run Events",
-      value: data.runEvents || 0,
-      note: "已记录事件",
+      value: gptPlusAccounts,
+      note: "GPT 手机号池已 Plus",
     }),
   ].join("");
 }
@@ -125,9 +162,9 @@ function renderSummary(data = {}) {
 function renderResources(data = {}) {
   const groups = [
     ["Outlook", data.outlookEmails || []],
+    ["GPT Phone Accounts", data.gptPhoneAccounts || []],
     ["PayPal Phone", data.paypalPhones || []],
     ["OpenAI SMS", data.openaiPhoneActivations || []],
-    ["Run History", data.runHistory || []],
   ];
   $("#resources").innerHTML = groups.map(([name, rows]) => `
     <article class="resource-card">
@@ -141,40 +178,41 @@ function renderResources(data = {}) {
 }
 
 function renderRuns(runs = []) {
-  const visibleRuns = state.filter === "all" ? runs : runs.filter((run) => run.status === state.filter);
-  if (!visibleRuns.length) {
-    $("#runs").innerHTML = `<div class="empty-state">当前筛选条件下没有账号运行记录。</div>`;
+  if (!runs.length) {
+    state.selectedRunId = "";
+    $("#runs").innerHTML = `<div class="empty-state">当前没有正在运行的账号。启动 runner 后，这里会自动出现 live run。</div>`;
     renderDetail();
     return;
   }
   if (!state.selectedRunId || !runs.some((run) => run.runId === state.selectedRunId)) {
-    state.selectedRunId = visibleRuns[0]?.runId || runs[0]?.runId || "";
+    state.selectedRunId = runs[0]?.runId || "";
   }
-  $("#runs").innerHTML = visibleRuns.map((run) => {
+  $("#runs").innerHTML = runs.map((run) => {
     const selected = run.runId === state.selectedRunId ? "selected" : "";
     const status = statusClass(run.status);
+    const identity = accountIdentity(run);
     return `
       <article class="run-card ${status} ${selected}">
-        <button class="run-button" type="button" data-run-id="${escapeHtml(run.runId)}" title="查看 ${escapeHtml(run.email || run.runId)}">
+        <button class="run-button" type="button" data-run-id="${escapeHtml(run.runId)}" title="查看 ${escapeHtml(identity || run.email || run.runId)}">
           <div class="run-head">
             <div class="run-title">
-              <div class="email">${escapeHtml(run.email || "(no email)")}</div>
+              <div class="email">${escapeHtml(run.email || identity || "(running account)")}</div>
               <div class="run-id">${escapeHtml(run.runId || "-")}</div>
             </div>
             <span class="status ${status}">${escapeHtml(statusLabel(run.status))}</span>
           </div>
           <div class="run-tags">
             ${chip("worker", run.workerId || "-", "neutral")}
+            ${chip("GPT", run.gptPhoneAccountId || "-", run.gptPhoneAccountId ? "running" : "neutral")}
             ${chip("IP", run.roxyExitIp || "-", run.roxyExitIp ? "running" : "neutral")}
             ${chip("CPA", run.cpaUploadStatus || "-", run.cpaUploadStatus === "done" ? "done" : "neutral")}
           </div>
           <div class="run-flow" aria-label="流程摘要">
             ${flowNode("Step", run.currentStep || "-")}
+            ${flowNode("Lifecycle", statusLabel(run.accountLifecycleStatus || "-"))}
             ${flowNode("Window", run.roxyDirId || "-")}
-            ${flowNode("Identity", [run.accountIdentifierType, run.accountIdentifier].filter(Boolean).join(" ") || "-")}
             ${flowNode("Updated", formatTime(run.updatedAt))}
           </div>
-          ${run.error ? `<div class="run-alert">${escapeHtml(shortText(run.error, 120))}</div>` : ""}
         </button>
       </article>
     `;
@@ -216,7 +254,7 @@ function renderDetail() {
     statusEl.textContent = "未选择";
     statusEl.className = "status neutral";
     $("#run-detail").className = "detail-empty";
-    $("#run-detail").innerHTML = "选择左侧账号后查看完整 runId、路径、错误和回调信息。";
+    $("#run-detail").innerHTML = "当前没有可查看的运行账号。";
     return;
   }
   statusEl.textContent = statusLabel(run.status);
@@ -229,32 +267,17 @@ function renderDetail() {
       ${detailRow("Worker / Window", `${run.workerId || "-"} / ${run.roxyDirId || "-"}`, { code: true })}
       ${detailRow("Roxy Exit IP", run.roxyExitIp)}
       ${detailRow("Current Step", run.currentStep)}
-      ${detailRow("Account Identity", [run.accountIdentifierType, run.accountIdentifier].filter(Boolean).join(" ") || "-")}
+      ${detailRow("Account Identity", accountIdentity(run) || "-")}
+      ${detailRow("GPT Account ID", run.gptPhoneAccountId)}
+      ${detailRow("Lifecycle", statusLabel(run.accountLifecycleStatus))}
+      ${detailRow("OpenAI Activation ID", run.openAiPhoneActivationId)}
+      ${detailRow("PayPal Phone ID", run.paypalPhoneId)}
       ${detailRow("CPA Upload", run.cpaUploadStatus)}
       ${detailRow("Callback JSON", run.callbackJsonPath, { code: true })}
-      ${detailRow("Artifact Dir", run.artifactDir, { code: true })}
       ${detailRow("Started", formatTime(run.startedAt))}
-      ${detailRow("Finished", formatTime(run.finishedAt))}
       ${detailRow("Updated", formatTime(run.updatedAt))}
-      ${run.error ? detailRow("Error", run.error, { code: true }) : ""}
     </dl>
   `;
-}
-
-function addEvent(row) {
-  const wrap = $("#events");
-  const empty = wrap.querySelector(".empty-state");
-  if (empty) empty.remove();
-  const div = document.createElement("div");
-  div.className = `event ${row.level === "error" ? "error" : ""}`;
-  div.innerHTML = `
-    <div class="event-meta">${escapeHtml(formatTime(row.createdAt))} [${escapeHtml(row.level || "-")}] ${escapeHtml(row.workerId || "-")} ${escapeHtml(row.step || "-")} ${escapeHtml(row.eventType || "-")}</div>
-    <div class="message">${escapeHtml(row.message || "")}</div>
-  `;
-  wrap.prepend(div);
-  state.eventCount += 1;
-  $("#event-count").textContent = state.eventCount;
-  while (wrap.children.length > 200) wrap.lastElementChild?.remove();
 }
 
 async function refresh() {
@@ -263,53 +286,22 @@ async function refresh() {
     $("#last-updated").textContent = "刷新中";
     const [summary, runs] = await Promise.all([
       getJson("/api/summary"),
-      getJson("/api/runs?limit=80"),
+      getJson("/api/runs?status=running&activeOnly=1&limit=100"),
     ]);
     state.summary = summary;
     state.runs = runs.runs || [];
     renderSummary(summary);
     renderResources(summary);
-    renderFilterCounts();
     renderRuns(state.runs);
     $("#sync-dot").className = "sync-dot ok";
     $("#last-updated").textContent = `已刷新 ${formatTime(new Date().toISOString())}`;
   } catch (error) {
     $("#sync-dot").className = "sync-dot error";
-    $("#last-updated").textContent = "刷新失败";
-    addEvent({
-      level: "error",
-      createdAt: new Date().toISOString(),
-      eventType: "ui_refresh_failed",
-      message: error.message,
-    });
+    $("#last-updated").textContent = `刷新失败：${error.message}`;
   }
 }
 
-function renderFilterCounts() {
-  document.querySelectorAll(".filter").forEach((button) => {
-    const filter = button.dataset.filter || "all";
-    const count = filter === "all" ? state.runs.length : countRunsByStatus(filter);
-    button.textContent = `${statusLabel(filter)} ${count}`;
-    button.classList.toggle("active", state.filter === filter);
-  });
-}
-
 $("#refresh").addEventListener("click", refresh);
-$("#filters").addEventListener("click", (event) => {
-  const button = event.target.closest("[data-filter]");
-  if (!button) return;
-  state.filter = button.dataset.filter || "all";
-  renderFilterCounts();
-  renderRuns(state.runs);
-});
 
 refresh();
-setInterval(refresh, 5000);
-
-const stream = new EventSource("/api/events/stream");
-stream.addEventListener("run_event", (event) => {
-  addEvent(JSON.parse(event.data));
-});
-stream.addEventListener("error", () => {
-  $("#sync-dot").className = "sync-dot error";
-});
+setInterval(refresh, 3000);

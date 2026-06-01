@@ -172,7 +172,8 @@ export class RoxyClient {
     });
     let opened = null;
     if (reopen) opened = await this.reopenWindow(dirId);
-    return { ...data, sid, asn, region, proxyUserName: this.buildProxyUsername(sid, asn), rawOpen: opened };
+    const ws = extractRoxyWebSocketUrl(opened) || extractRoxyWebSocketUrl(data);
+    return { ...data, sid, asn, region, proxyUserName: this.buildProxyUsername(sid, asn), ws, rawOpen: opened };
   }
 
   async createAndOpen(name) {
@@ -180,7 +181,7 @@ export class RoxyClient {
     const dirId = this.windowDirId(created);
     if (!dirId) throw new Error(`roxy create missing dirId: ${JSON.stringify(created)}`);
     const opened = await this.openWindow(dirId);
-    const ws = String(opened.ws || opened.webSocketDebuggerUrl || "");
+    const ws = extractRoxyWebSocketUrl(opened);
     if (!ws) throw new Error(`roxy open missing ws: ${JSON.stringify(opened)}`);
     return { ...created, dirId, ws, rawOpen: opened };
   }
@@ -190,7 +191,7 @@ export class RoxyClient {
     if (!found) return null;
     const dirId = this.windowDirId(found);
     const opened = await this.openWindow(dirId);
-    const ws = String(opened.ws || opened.webSocketDebuggerUrl || found.ws || "");
+    const ws = extractRoxyWebSocketUrl(opened) || extractRoxyWebSocketUrl(found);
     if (!ws) throw new Error(`roxy recover open missing ws: ${JSON.stringify(opened)}`);
     return { ...found, dirId, ws, rawOpen: opened, recovered: true };
   }
@@ -252,4 +253,15 @@ export class RoxyClient {
     }
     throw lastError || new Error(`cannot resolve roxy local proxy for dir_id=${dirId}`);
   }
+}
+
+export function extractRoxyWebSocketUrl(payload = {}) {
+  return String(
+    payload?.ws
+      || payload?.webSocketDebuggerUrl
+      || payload?.websocketDebuggerUrl
+      || payload?.browserWSEndpoint
+      || payload?.webSocketUrl
+      || "",
+  ).trim();
 }

@@ -6,6 +6,11 @@ data/*.db
 data/*.db-shm
 data/*.db-wal
 data/*.db.backup*
+artifacts/
+callback-json/
+:memory:
+docs/CHANGE_MEMORY.md
+docs/E2E_TEST_MEMORY.md
 output/*
 !output/.gitkeep
 cpa-json/*

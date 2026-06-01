@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import {
   buildPaypalRiskBlockedError,
+  buildPaypalRiskObservedError,
   inspectPaypalRiskBlockHtml,
   inspectPaypalRiskBlockSnapshot,
   isPaypalRiskBlockedState,
@@ -58,5 +59,11 @@ const error = buildPaypalRiskBlockedError(blockedSnapshot, blockedSnapshot);
 assert.equal(error.code, "PAYPAL_RISK_BLOCKED");
 assert.equal(error.retryable, true);
 assert.match(error.message, /PAYPAL_RISK_BLOCKED/);
+
+const observedError = buildPaypalRiskObservedError(blockedSnapshot, blockedSnapshot);
+assert.equal(observedError.code, "PAYPAL_RISK_OBSERVED");
+assert.equal(observedError.retryable, false);
+assert.equal(observedError.preserveBrowserWindow, true);
+assert.match(observedError.message, /PAYPAL_RISK_OBSERVED/);
 
 console.log("paypal risk tests passed");

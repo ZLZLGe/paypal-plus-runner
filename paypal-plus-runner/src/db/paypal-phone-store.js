@@ -3,18 +3,69 @@ import { utcNow } from "./connection.js";
 
 export function normalizePaypalPhone(rawPhone) {
   const digits = String(rawPhone || "").replace(/\D+/g, "");
+  if (digits.length === 12 && digits.startsWith("81")) {
+    return `+${digits}`;
+  }
+  if (digits.length === 11 && digits.startsWith("0")) {
+    return `+81${digits.slice(1)}`;
+  }
+  if (digits.length === 10 && /^(70|80|90)/.test(digits)) {
+    return `+81${digits}`;
+  }
   if (digits.length === 11 && digits.startsWith("1")) {
     return `+1${digits.slice(1)}`;
   }
   if (digits.length === 10) {
     return `+1${digits}`;
   }
-  throw new Error(`invalid US phone: ${rawPhone}`);
+  throw new Error(`invalid PayPal phone: ${rawPhone}`);
 }
 
 export function paypalLocalPhone(phone) {
   const normalized = normalizePaypalPhone(phone);
-  return normalized.replace(/^\+1/, "");
+  if (normalized.startsWith("+81")) return normalized.replace(/^\+81/, "");
+  if (normalized.startsWith("+1")) return normalized.replace(/^\+1/, "");
+  return normalized.replace(/^\+/, "");
+}
+
+export function paypalPhoneCountryCode(phone) {
+  const normalized = normalizePaypalPhone(phone);
+  if (normalized.startsWith("+81")) return "JP";
+  if (normalized.startsWith("+1")) return "US";
+  return "";
+}
+
+export function paypalPhoneDialCode(phone) {
+  const normalized = normalizePaypalPhone(phone);
+  if (normalized.startsWith("+81")) return "81";
+  if (normalized.startsWith("+1")) return "1";
+  return "";
+}
+
+export function normalizePaypalPhoneCountryCodes(countryCodes = []) {
+  const values = Array.isArray(countryCodes) ? countryCodes : [countryCodes];
+  const normalized = values
+    .flatMap((value) => String(value || "").split(","))
+    .map((value) => value.trim().toUpperCase())
+    .filter(Boolean);
+  return [...new Set(normalized)];
+}
+
+function phoneCountrySql(countryCodes = []) {
+  const normalized = normalizePaypalPhoneCountryCodes(countryCodes);
+  if (!normalized.length) return { clause: "", params: [] };
+  const parts = [];
+  const params = [];
+  if (normalized.includes("JP")) {
+    parts.push("phone LIKE '+81%'");
+  }
+  if (normalized.includes("US")) {
+    parts.push("phone LIKE '+1%'");
+  }
+  if (!parts.length) {
+    return { clause: "AND 0", params };
+  }
+  return { clause: `AND (${parts.join(" OR ")})`, params };
 }
 
 export function parsePaypalPhoneLine(line) {
@@ -73,9 +124,10 @@ export function importPaypalPhonesFile(db, filePath, { maxUse = 5 } = {}) {
   return { imported, skipped, errors };
 }
 
-export function leasePaypalPhone(db, { workerId, runId, leaseMinutes = 30 } = {}) {
+export function leasePaypalPhone(db, { workerId, runId, leaseMinutes = 30, countryCodes = ["JP"] } = {}) {
   const now = utcNow();
   const expiresExpr = `datetime('now', '+${Math.max(1, Number.parseInt(String(leaseMinutes), 10) || 30)} minutes')`;
+  const countryFilter = phoneCountrySql(countryCodes);
   db.exec("BEGIN IMMEDIATE");
   try {
     const row = db.prepare(`
@@ -85,9 +137,10 @@ export function leasePaypalPhone(db, { workerId, runId, leaseMinutes = 30 } = {}
           OR (status = 'leased' AND lease_expires_at < CURRENT_TIMESTAMP)
         )
         AND used_count < max_use
+        ${countryFilter.clause}
       ORDER BY used_count ASC, updated_at ASC, id ASC
       LIMIT 1
-    `).get();
+    `).get(...countryFilter.params);
     if (!row) {
       db.exec("COMMIT");
       return null;
@@ -160,10 +213,12 @@ export function releasePaypalPhone(db, phoneId, { runId = "", success = false, d
   }
 }
 
-export function countAvailablePaypalPhones(db) {
+export function countAvailablePaypalPhones(db, { countryCodes = ["JP"] } = {}) {
+  const countryFilter = phoneCountrySql(countryCodes);
   return Number(db.prepare(`
     SELECT COUNT(1) AS c FROM paypal_phone_pool
     WHERE (status = 'active' OR (status = 'leased' AND lease_expires_at < CURRENT_TIMESTAMP))
       AND used_count < max_use
-  `).get().c || 0);
+      ${countryFilter.clause}
+  `).get(...countryFilter.params).c || 0);
 }

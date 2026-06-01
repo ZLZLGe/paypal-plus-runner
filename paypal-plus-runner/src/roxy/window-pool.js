@@ -56,6 +56,86 @@ export class WindowPool {
   }
 }
 
+export async function openManagedRoxyWindow(config, { client = null, name = "", logger = null } = {}) {
+  const roxyCfg = config.roxy || {};
+  const roxyClient = client || new RoxyClient(roxyCfg);
+  const windowInfo = await roxyClient.createOrRecoverAndOpen(name, {
+    attempts: Number(roxyCfg.createAttempts || 3),
+    retryDelayMs: Number(roxyCfg.createRetryDelayMs || 8000),
+  });
+  const dirId = String(windowInfo.dirId || "");
+  const connected = await connectOverCdp(windowInfo.ws, {
+    timeoutMs: Number(roxyCfg.cdpConnectTimeoutMs || 45000),
+  });
+  let localProxyUrl = "";
+  try {
+    localProxyUrl = await RoxyClient.buildLocalWindowProxyUrlWithRetry(dirId, {
+      attempts: Number(roxyCfg.localProxyResolveAttempts || 10),
+      delayMs: Number(roxyCfg.localProxyResolveDelayMs || 750),
+    });
+  } catch (error) {
+    logger?.warn?.("local roxy proxy resolve failed", { dirId, error: error.message });
+  }
+
+  let probe = { ok: false, ip: "", error: "" };
+  if (roxyCfg.probeExitIp !== false) {
+    try {
+      const probeOptions = {
+        probeUrl: String(roxyCfg.ipProbeUrl || "https://api.ipify.org?format=json"),
+        timeoutMs: Number(roxyCfg.ipProbeTimeoutMs || 20000),
+      };
+      probe = localProxyUrl
+        ? await probeIp({ ...probeOptions, proxyUrl: localProxyUrl })
+        : await probeWindowExitIp(connected.page, probeOptions);
+      const requiredCountry = String(roxyCfg.requireExitCountry || "").trim().toUpperCase();
+      const configuredRegion = String(windowInfo.region || "").trim().toUpperCase();
+      if (requiredCountry && configuredRegion && configuredRegion !== requiredCountry) {
+        throw new Error(`roxy browser proxy region is ${configuredRegion}, expected ${requiredCountry}`);
+      }
+      if (requiredCountry && !probe.ok && !configuredRegion) {
+        throw new Error(`roxy browser exit probe failed before PayPal flow: ${probe.error || probe.status || "unknown"}`);
+      }
+      if (requiredCountry && probe.ip) {
+        probe.countryCode = await lookupCountryCodeForIp(probe.ip, {
+          timeoutMs: Number(roxyCfg.geoLookupTimeoutMs || 15000),
+          connectTimeoutMs: Number(roxyCfg.geoLookupConnectTimeoutMs || 8000),
+        });
+        if (!probe.countryCode && !configuredRegion) {
+          throw new Error(`roxy browser exit country could not be detected, expected ${requiredCountry}; ip=${probe.ip}`);
+        }
+        if (probe.countryCode && probe.countryCode !== requiredCountry) {
+          throw new Error(`roxy browser exit country is ${probe.countryCode}, expected ${requiredCountry}; ip=${probe.ip}`);
+        }
+      }
+    } catch (error) {
+      probe = { ok: false, ip: "", error: error.message };
+      if (roxyCfg.requireExitCountry) {
+        try {
+          await connected.browser?.close?.();
+        } catch {
+          // CDP may already be disconnected if the probe failed during navigation.
+        }
+        await roxyClient.closeWindow(dirId).catch(() => undefined);
+        throw error;
+      }
+    }
+  }
+
+  return {
+    ...windowInfo,
+    name,
+    dirId,
+    ws: windowInfo.ws,
+    localProxyUrl,
+    exitIp: probe.ip || "",
+    exitProbe: probe,
+    browser: connected.browser,
+    context: connected.context,
+    page: connected.page,
+    accountRuns: 0,
+  };
+}
+
 export async function createRoxyWindowPool(config, { count, logger } = {}) {
   const roxyCfg = config.roxy || {};
   const client = new RoxyClient(roxyCfg);
@@ -69,90 +149,16 @@ export async function createRoxyWindowPool(config, { count, logger } = {}) {
   for (let index = 1; index <= requested; index += 1) {
     const name = buildWindowName(namePrefix, index);
     logger?.info?.("creating roxy window", { index, requested, name });
-    const windowInfo = await client.createOrRecoverAndOpen(name, {
-      attempts: createAttempts,
-      retryDelayMs: createRetryDelayMs,
-    });
-    const dirId = String(windowInfo.dirId || "");
-    const connected = await connectOverCdp(windowInfo.ws, {
-      timeoutMs: Number(roxyCfg.cdpConnectTimeoutMs || 45000),
-    });
-    let localProxyUrl = "";
-    try {
-      localProxyUrl = await RoxyClient.buildLocalWindowProxyUrlWithRetry(dirId, {
-        attempts: Number(roxyCfg.localProxyResolveAttempts || 10),
-        delayMs: Number(roxyCfg.localProxyResolveDelayMs || 750),
-      });
-    } catch (error) {
-      logger?.warn?.("local roxy proxy resolve failed", { dirId, error: error.message });
-    }
-
-    let probe = { ok: false, ip: "", error: "" };
-    if (roxyCfg.probeExitIp !== false) {
-      try {
-        const probeOptions = {
-          probeUrl: String(roxyCfg.ipProbeUrl || "https://api.ipify.org?format=json"),
-          timeoutMs: Number(roxyCfg.ipProbeTimeoutMs || 20000),
-        };
-        probe = localProxyUrl
-          ? await probeIp({ ...probeOptions, proxyUrl: localProxyUrl })
-          : await probeWindowExitIp(connected.page, probeOptions);
-        const requiredCountry = String(roxyCfg.requireExitCountry || "").trim().toUpperCase();
-        const configuredRegion = String(windowInfo.region || "").trim().toUpperCase();
-        if (requiredCountry && configuredRegion && configuredRegion !== requiredCountry) {
-          throw new Error(`roxy browser proxy region is ${configuredRegion}, expected ${requiredCountry}`);
-        }
-        if (requiredCountry && !probe.ok && !configuredRegion) {
-          throw new Error(`roxy browser exit probe failed before PayPal flow: ${probe.error || probe.status || "unknown"}`);
-        }
-        if (requiredCountry && probe.ip) {
-          probe.countryCode = await lookupCountryCodeForIp(probe.ip, {
-            timeoutMs: Number(roxyCfg.geoLookupTimeoutMs || 15000),
-            connectTimeoutMs: Number(roxyCfg.geoLookupConnectTimeoutMs || 8000),
-          });
-          if (!probe.countryCode && !configuredRegion) {
-            throw new Error(`roxy browser exit country could not be detected, expected ${requiredCountry}; ip=${probe.ip}`);
-          }
-          if (probe.countryCode && probe.countryCode !== requiredCountry) {
-            throw new Error(`roxy browser exit country is ${probe.countryCode}, expected ${requiredCountry}; ip=${probe.ip}`);
-          }
-        }
-      } catch (error) {
-        probe = { ok: false, ip: "", error: error.message };
-        if (roxyCfg.requireExitCountry) {
-          try {
-            await connected.browser?.close?.();
-          } catch {
-            // CDP may already be disconnected if the probe failed during navigation.
-          }
-          await client.closeWindow(dirId).catch(() => undefined);
-          throw error;
-        }
-      }
-    }
-
-    const managed = {
-      ...windowInfo,
-      name,
-      dirId,
-      ws: windowInfo.ws,
-      localProxyUrl,
-      exitIp: probe.ip || "",
-      exitProbe: probe,
-      browser: connected.browser,
-      context: connected.context,
-      page: connected.page,
-      accountRuns: 0,
-    };
+    const managed = await openManagedRoxyWindow(config, { client, name, logger, createAttempts, createRetryDelayMs });
     pool.add(managed);
     logger?.info?.("roxy window ready", {
       name,
-      dirId,
-      asn: windowInfo.asn || "",
-      region: windowInfo.region || "",
+      dirId: managed.dirId,
+      asn: managed.asn || "",
+      region: managed.region || "",
       exitIp: managed.exitIp,
       exitCountry: managed.exitProbe?.countryCode || "",
-      localProxyUrl: localProxyUrl ? "resolved" : "",
+      localProxyUrl: managed.localProxyUrl ? "resolved" : "",
     });
     if (index < requested && createIntervalMs > 0) await sleep(createIntervalMs);
   }

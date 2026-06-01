@@ -10,6 +10,12 @@ import {
   requestHeroSmsActivation,
   requestHeroSmsAdditionalSms,
 } from "./hero-sms.js";
+import {
+  createPendingGptPhoneAccountFromActivation,
+  getActiveOpenAiPhoneActivationForAccount,
+  markOpenAiPhoneActivationStatus,
+  recordOpenAiPhoneActivation,
+} from "../db/gpt-phone-account-store.js";
 
 function normalizePhone(value = "") {
   const text = String(value || "").trim();
@@ -117,8 +123,81 @@ async function recoverConfiguredHeroSmsActivation(config = {}) {
   return reused;
 }
 
-export async function resolveOpenAiPhoneActivation(config = {}) {
+function isNonReusableGptPhoneAccountError(error) {
+  return /already belongs to a non-reusable GPT account/i.test(String(error?.message || error || ""));
+}
+
+async function cancelDuplicateHeroSmsActivation(config, db, activation, activationRow, cause) {
+  const completed = { ...activation, duplicateRejectedAt: new Date().toISOString() };
+  try {
+    completed.cancelMessage = await cancelHeroSmsActivation(config, activation);
+    completed.cancelledAt = new Date().toISOString();
+    markOpenAiPhoneActivationStatus(db, { dbActivationId: activationRow.id }, "cancelled", {
+      error: cause.message,
+      completed,
+    });
+  } catch (cancelError) {
+    completed.cancelError = cancelError.message;
+    markOpenAiPhoneActivationStatus(db, { dbActivationId: activationRow.id }, "failed", {
+      error: `${cause.message}; cancel failed: ${cancelError.message}`,
+      completed,
+    });
+  }
+}
+
+export async function resolveOpenAiPhoneActivation(config = {}, options = {}) {
   if (normalizeOpenAiPhoneProvider(config) === "hero-sms") {
+    if (options.db) {
+      if (options.gptPhoneAccountId) {
+        const existing = getActiveOpenAiPhoneActivationForAccount(options.db, options.gptPhoneAccountId);
+        if (existing) return existing;
+        if (options.allowNew === false) {
+          throw new Error(`GPT phone account ${options.gptPhoneAccountId} has no active OpenAI phone activation`);
+        }
+      }
+      const maxAttempts = Math.max(1, Number.parseInt(String(
+        options.maxAttempts || config.runner?.signupPhoneActivationMaxAttempts || 3,
+      ), 10) || 3);
+      let lastDuplicateError = null;
+      for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+        const activation = await requestHeroSmsActivation(config);
+        const activationRow = recordOpenAiPhoneActivation(options.db, activation, {
+          gptPhoneAccountId: options.gptPhoneAccountId || null,
+          runId: options.runId || "",
+          workerId: options.workerId || "",
+          status: "requested",
+          leaseMinutes: Number(options.leaseMinutes || config.runner?.gptAccountLeaseMinutes || 120),
+        });
+        let accountRow = null;
+        try {
+          accountRow = options.gptPhoneAccountId
+            ? null
+            : createPendingGptPhoneAccountFromActivation(options.db, activation, {
+                activationId: activationRow.id,
+                workerId: options.workerId || "",
+                runId: options.runId || "",
+                leaseMinutes: Number(options.leaseMinutes || config.runner?.gptAccountLeaseMinutes || 120),
+                gptPassword: options.gptPassword || config.runner?.gptPassword || "",
+              });
+        } catch (error) {
+          if (!options.gptPhoneAccountId && isNonReusableGptPhoneAccountError(error)) {
+            lastDuplicateError = error;
+            await cancelDuplicateHeroSmsActivation(config, options.db, activation, activationRow, error);
+            if (attempt < maxAttempts) continue;
+          }
+          throw error;
+        }
+        if (accountRow?.id && !activationRow.gpt_phone_account_id) {
+          activationRow.gpt_phone_account_id = accountRow.id;
+        }
+        return {
+          ...activation,
+          dbActivationId: activationRow.id,
+          gptPhoneAccountId: options.gptPhoneAccountId || accountRow?.id || activationRow.gpt_phone_account_id || null,
+        };
+      }
+      throw lastDuplicateError || new Error("HeroSMS activation request failed before returning an OpenAI phone");
+    }
     const saved = readHeroSmsReuseActivation(config);
     if (saved) return saved;
     const recovered = await recoverConfiguredHeroSmsActivation(config);
@@ -142,26 +221,26 @@ export async function resolveOpenAiPhoneActivation(config = {}) {
   throw new Error("openaiPhone manualPhone/manualSmsUrl or openaiPhone.file is required");
 }
 
-export async function pollOpenAiPhoneCode(activation = {}, config = {}, { ignoreCodes = [] } = {}) {
+export async function pollOpenAiPhoneCode(activation = {}, config = {}, { ignoreCodes = [], timeoutMs, intervalMs } = {}) {
   if (activation.provider === "hero-sms") {
     return pollHeroSmsActivationCode(config, activation, {
       ignoreCodes,
-      timeoutMs: Number(config.openaiPhone?.pollTimeoutMs || 180000),
-      intervalMs: Number(config.openaiPhone?.pollIntervalMs || 3000),
+      timeoutMs: Number(timeoutMs || config.openaiPhone?.pollTimeoutMs || 180000),
+      intervalMs: Number(intervalMs || config.openaiPhone?.pollIntervalMs || 3000),
     });
   }
 
   const smsUrl = String(activation.smsUrl || "").trim();
   if (!smsUrl) throw new Error("OpenAI phone activation smsUrl is empty");
   const initialDelayMs = Number(config.openaiPhone?.initialSmsDelayMs ?? 10000);
-  const pollIntervalMs = Math.max(250, Number(config.openaiPhone?.pollIntervalMs ?? 3000));
-  const timeoutMs = Math.max(1000, Number(config.openaiPhone?.pollTimeoutMs ?? 180000));
+  const pollIntervalMs = Math.max(250, Number(intervalMs ?? config.openaiPhone?.pollIntervalMs ?? 3000));
+  const resolvedTimeoutMs = Math.max(1000, Number(timeoutMs ?? config.openaiPhone?.pollTimeoutMs ?? 180000));
   const requestTimeoutMs = Math.max(1000, Number(config.openaiPhone?.requestTimeoutMs ?? 15000));
   const ignored = new Set(ignoreCodes.map((item) => String(item).trim()).filter(Boolean));
   if (initialDelayMs > 0) await sleep(initialDelayMs);
   const startedAt = Date.now();
   let lastResponse = "";
-  while (Date.now() - startedAt < timeoutMs) {
+  while (Date.now() - startedAt < resolvedTimeoutMs) {
     const url = smsUrl.includes("?") ? `${smsUrl}&t=${Date.now()}` : `${smsUrl}?t=${Date.now()}`;
     try {
       const controller = new AbortController();
@@ -193,22 +272,28 @@ export async function requestOpenAiPhoneAdditionalSms(activation = {}, config = 
   return { supported: true, ...result };
 }
 
-export async function finishOpenAiPhoneActivation(activation = {}, config = {}) {
+export async function finishOpenAiPhoneActivation(activation = {}, config = {}, options = {}) {
   if (activation.provider !== "hero-sms" || activation.finishedAt || activation.cancelledAt) {
     return { supported: activation.provider === "hero-sms", skipped: true };
   }
   const message = await finishHeroSmsActivation(config, activation);
   activation.finishedAt = new Date().toISOString();
   clearHeroSmsReuseActivation(config, activation);
+  if (options.db && activation.dbActivationId) {
+    markOpenAiPhoneActivationStatus(options.db, activation, "finished", { completed: activation });
+  }
   return { supported: true, message };
 }
 
-export async function cancelOpenAiPhoneActivation(activation = {}, config = {}) {
+export async function cancelOpenAiPhoneActivation(activation = {}, config = {}, options = {}) {
   if (activation.provider !== "hero-sms" || activation.finishedAt || activation.cancelledAt) {
     return { supported: activation.provider === "hero-sms", skipped: true };
   }
   const message = await cancelHeroSmsActivation(config, activation);
   activation.cancelledAt = new Date().toISOString();
   clearHeroSmsReuseActivation(config, activation);
+  if (options.db && activation.dbActivationId) {
+    markOpenAiPhoneActivationStatus(options.db, activation, "cancelled", { completed: activation });
+  }
   return { supported: true, message };
 }
