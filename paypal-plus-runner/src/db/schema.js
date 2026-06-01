@@ -191,6 +191,18 @@ export function initSchema(db) {
       UNIQUE(phone, code)
     );
 
+    CREATE TABLE IF NOT EXISTS checkout_links (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      gpt_phone_account_id INTEGER NOT NULL,
+      run_id TEXT NOT NULL DEFAULT '',
+      checkout_long_url TEXT NOT NULL UNIQUE,
+      status TEXT NOT NULL DEFAULT 'ready',
+      last_error TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      paid_at TEXT NOT NULL DEFAULT ''
+    );
+
     CREATE TABLE IF NOT EXISTS run_history (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       run_id TEXT NOT NULL UNIQUE,
@@ -249,6 +261,8 @@ export function initSchema(db) {
     CREATE INDEX IF NOT EXISTS idx_outlook_status ON outlook_emails(status, id);
     CREATE INDEX IF NOT EXISTS idx_phone_status ON paypal_phone_pool(status, used_count, updated_at);
     CREATE INDEX IF NOT EXISTS idx_paypal_phone_sms_codes_phone_seen ON paypal_phone_sms_codes(phone, last_seen_at);
+    CREATE INDEX IF NOT EXISTS idx_checkout_links_account_status ON checkout_links(gpt_phone_account_id, status, updated_at);
+    CREATE INDEX IF NOT EXISTS idx_checkout_links_status ON checkout_links(status, updated_at);
     CREATE INDEX IF NOT EXISTS idx_run_history_status ON run_history(status, updated_at);
     CREATE INDEX IF NOT EXISTS idx_openai_phone_status ON openai_phone_activations(status, run_id, updated_at);
     CREATE INDEX IF NOT EXISTS idx_run_events_run ON run_events(run_id, id);

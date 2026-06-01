@@ -13,9 +13,11 @@
     "phones:list": "node src/cli.js phones:list",
     "checkout:probe": "node src/cli.js checkout:probe",
     "roxy:probe": "node src/cli.js roxy:probe",
+    "ui:dev": "vite --config src/ui/client/vite.config.js",
+    "ui:build": "vite build --config src/ui/client/vite.config.js",
     "ui": "node src/cli.js ui",
     "dry-run": "node src/cli.js start --dry-run",
-    "test": "node test/paypal-phone-store.test.js && node test/paypal-phone-sms-code-store.test.js && node test/paypal-phone-code.test.js && node test/hero-sms.test.js && node test/deferred-outlook-lease.test.js && node test/plus-store.test.js && node test/gpt-phone-account-store.test.js && node test/address-provider.test.js && node test/signup-profile.test.js && node test/roxy-window-recovery.test.js && node test/fill-password.test.js && node test/phone-flow.test.js && node test/checkout-conversion.test.js && node test/safe-output.test.js && node test/cpa-json.test.js && node test/cpa-oauth-upload.test.js && node test/run-events.test.js && node test/ui-server.test.js && node test/signup-detour.test.js && node test/profile-and-checkout-recovery.test.js && node test/signup-page-choose-account.test.js && node test/signup-page-verification-target.test.js && node test/paypal-flow-detection.test.js && node test/paypal-risk.test.js",
+    "test": "node test/paypal-phone-store.test.js && node test/paypal-phone-sms-code-store.test.js && node test/paypal-phone-code.test.js && node test/hero-sms.test.js && node test/deferred-outlook-lease.test.js && node test/plus-store.test.js && node test/gpt-phone-account-store.test.js && node test/checkout-link-store.test.js && node test/address-provider.test.js && node test/signup-profile.test.js && node test/roxy-window-recovery.test.js && node test/fill-password.test.js && node test/phone-flow.test.js && node test/checkout-conversion.test.js && node test/safe-output.test.js && node test/cpa-json.test.js && node test/cpa-oauth-upload.test.js && node test/run-events.test.js && node test/ui-server.test.js && node test/ui-job-manager.test.js && node test/signup-detour.test.js && node test/profile-and-checkout-recovery.test.js && node test/signup-page-choose-account.test.js && node test/signup-page-verification-target.test.js && node test/paypal-flow-detection.test.js && node test/paypal-risk.test.js",
     "check:syntax": "find src test -name '*.js' -print0 | xargs -0 -n1 node --check",
     "check": "npm run check:syntax && node src/cli.js db:init --db data/check.db && npm test && rm -f data/check.db data/check.db-shm data/check.db-wal"
   },
@@ -23,6 +25,11 @@
     "node": ">=24.0.0"
   },
   "dependencies": {
-    "playwright-core": "^1.60.0"
+    "@lucide/vue": "^1.17.0",
+    "@vitejs/plugin-vue": "^6.0.7",
+    "naive-ui": "^2.44.1",
+    "playwright-core": "^1.60.0",
+    "vite": "^8.0.16",
+    "vue": "^3.5.35"
   }
 }

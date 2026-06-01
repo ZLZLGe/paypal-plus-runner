@@ -6,7 +6,9 @@ import { openDatabase } from "../db/connection.js";
 import { initSchema } from "../db/schema.js";
 import { getDatabaseStats } from "../db/stats.js";
 import { listRunEvents } from "../db/run-event-store.js";
-import { redactForCliOutput } from "../utils/safe-output.js";
+import { listCheckoutLinks } from "../db/checkout-link-store.js";
+import { redactForCliOutput, redactStringForOutput } from "../utils/safe-output.js";
+import { UiJobManager } from "./job-manager.js";
 
 const UI_ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "public");
 
@@ -31,6 +33,14 @@ function openUiDb(config) {
 
 function parseBoolean(value = "") {
   return ["1", "true", "yes", "y", "on"].includes(String(value || "").trim().toLowerCase());
+}
+
+async function readJsonBody(req) {
+  const chunks = [];
+  for await (const chunk of req) chunks.push(chunk);
+  const text = Buffer.concat(chunks).toString("utf8").trim();
+  if (!text) return {};
+  return JSON.parse(text);
 }
 
 function queryRuns(db, { status = "", limit = 100, activeOnly = false, activeWithinMinutes = 30 } = {}) {
@@ -97,6 +107,75 @@ function queryResource(db, table) {
   return db.prepare(allowed[table]).all();
 }
 
+function maskPhoneNumber(value = "") {
+  const text = String(value || "").trim();
+  if (!text) return "";
+  const digits = text.replace(/\D+/g, "");
+  if (digits.length <= 6) return text ? "[REDACTED_PHONE]" : "";
+  const prefix = text.startsWith("+") ? "+" : "";
+  return `${prefix}${digits.slice(0, 2)}***${digits.slice(-4)}`;
+}
+
+function maskPlusAccount(row = {}) {
+  return {
+    ...row,
+    signupPhoneNumber: maskPhoneNumber(row.signupPhoneNumber),
+  };
+}
+
+function maskCheckoutLink(row = {}) {
+  return {
+    ...row,
+    signupPhoneNumber: maskPhoneNumber(row.signupPhoneNumber),
+    linkPreview: redactStringForOutput(row.checkoutLongUrl || ""),
+  };
+}
+
+function queryPlusAccounts(db, { stage = "", limit = 200 } = {}) {
+  const normalizedStage = String(stage || "").trim().toLowerCase();
+  const clauses = [];
+  const params = [];
+  if (normalizedStage === "pay-link") {
+    clauses.push("g.lifecycle_status = 'registered'");
+    clauses.push("EXISTS (SELECT 1 FROM checkout_links cl WHERE cl.gpt_phone_account_id = g.id AND cl.status = 'ready')");
+  } else if (normalizedStage === "cpa-upload") {
+    clauses.push("g.lifecycle_status IN ('plus_done', 'email_bound')");
+  } else if (normalizedStage === "register-link") {
+    clauses.push("g.lifecycle_status = 'registered'");
+    clauses.push("NOT EXISTS (SELECT 1 FROM checkout_links cl WHERE cl.gpt_phone_account_id = g.id AND cl.status IN ('ready', 'paying', 'paid'))");
+  }
+  params.push(Math.max(1, Math.min(500, Number.parseInt(String(limit || 200), 10) || 200)));
+  const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
+  return db.prepare(`
+    SELECT g.id,
+           g.signup_phone_number AS signupPhoneNumber,
+           g.lifecycle_status AS lifecycleStatus,
+           g.lease_status AS leaseStatus,
+           g.bound_email AS boundEmail,
+           g.cpa_upload_status AS cpaUploadStatus,
+           g.current_run_id AS currentRunId,
+           g.last_failed_step AS lastFailedStep,
+           g.last_error AS lastError,
+           g.updated_at AS updatedAt,
+           (
+             SELECT COUNT(1)
+             FROM checkout_links cl
+             WHERE cl.gpt_phone_account_id = g.id
+           ) AS checkoutLinkCount,
+           (
+             SELECT cl.status
+             FROM checkout_links cl
+             WHERE cl.gpt_phone_account_id = g.id
+             ORDER BY cl.id DESC
+             LIMIT 1
+           ) AS latestCheckoutLinkStatus
+    FROM gpt_phone_accounts g
+    ${where}
+    ORDER BY g.id DESC
+    LIMIT ?
+  `).all(...params).map(maskPlusAccount);
+}
+
 async function sendStatic(req, res) {
   const parsed = new URL(req.url, "http://127.0.0.1");
   const pathname = parsed.pathname === "/" ? "/index.html" : parsed.pathname;
@@ -113,12 +192,57 @@ async function sendStatic(req, res) {
   }
 }
 
-export function createUiServer(config) {
+export function createUiServer(config, { jobManager = null } = {}) {
+  const tasks = jobManager || new UiJobManager({ config });
   return http.createServer(async (req, res) => {
     const parsed = new URL(req.url, "http://127.0.0.1");
     if (parsed.pathname.startsWith("/api/")) {
       const db = openUiDb(config);
       try {
+        if (parsed.pathname === "/api/plus/accounts") {
+          return sendJson(res, {
+            ok: true,
+            accounts: queryPlusAccounts(db, {
+              stage: parsed.searchParams.get("stage") || "",
+              limit: parsed.searchParams.get("limit") || 200,
+            }),
+          });
+        }
+        if (parsed.pathname === "/api/plus/checkout-links") {
+          return sendJson(res, {
+            ok: true,
+            links: listCheckoutLinks(db, {
+              status: parsed.searchParams.get("status") || "",
+              limit: parsed.searchParams.get("limit") || 100,
+            }).map(maskCheckoutLink),
+          });
+        }
+        if (parsed.pathname === "/api/plus/tasks") {
+          if (req.method === "POST") {
+            const body = await readJsonBody(req);
+            const task = tasks.start({
+              mode: body.mode || body.process || "full",
+              ids: body.ids || [],
+              limit: body.limit || 1,
+              windows: body.windows || 1,
+            });
+            return sendJson(res, { ok: true, task }, 201);
+          }
+          return sendJson(res, { ok: true, tasks: tasks.list() });
+        }
+        const plusTaskMatch = parsed.pathname.match(/^\/api\/plus\/tasks\/([^/]+)(?:\/(stop))?$/);
+        if (plusTaskMatch) {
+          const taskId = decodeURIComponent(plusTaskMatch[1]);
+          const action = plusTaskMatch[2] || "";
+          if (action === "stop") {
+            const task = tasks.stop(taskId);
+            if (!task) return notFound(res);
+            return sendJson(res, { ok: true, task });
+          }
+          const task = tasks.get(taskId);
+          if (!task) return notFound(res);
+          return sendJson(res, { ok: true, task });
+        }
         if (parsed.pathname === "/api/summary") {
           return sendJson(res, { ok: true, ...getDatabaseStats(db) });
         }

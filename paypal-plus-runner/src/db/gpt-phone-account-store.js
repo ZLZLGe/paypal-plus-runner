@@ -41,6 +41,12 @@ function leaseExpiresExpr(leaseMinutes = 120) {
   return `datetime('now', '+${minutes} minutes')`;
 }
 
+function normalizePositiveIds(ids = []) {
+  return (Array.isArray(ids) ? ids : [ids])
+    .map((value) => Number.parseInt(String(value || ""), 10))
+    .filter((value) => Number.isFinite(value) && value > 0);
+}
+
 function parseJson(value = "") {
   if (!value) return null;
   try {
@@ -96,9 +102,11 @@ export function gptPhoneAccountToWorkflowAccount(row = {}) {
   };
 }
 
-export function leaseReusableGptPhoneAccount(db, { workerId = "", runId = "", leaseMinutes = 120 } = {}) {
+export function leaseReusableGptPhoneAccount(db, { workerId = "", runId = "", leaseMinutes = 120, ids = [] } = {}) {
   const expiresExpr = leaseExpiresExpr(leaseMinutes);
   const now = utcNow();
+  const normalizedIds = normalizePositiveIds(ids);
+  const idClause = normalizedIds.length ? `AND id IN (${normalizedIds.map(() => "?").join(",")})` : "";
   db.exec("BEGIN IMMEDIATE");
   try {
     const row = db.prepare(`
@@ -110,6 +118,7 @@ export function leaseReusableGptPhoneAccount(db, { workerId = "", runId = "", le
           OR lease_expires_at = ''
           OR lease_expires_at < CURRENT_TIMESTAMP
         )
+        ${idClause}
       ORDER BY CASE lifecycle_status
           WHEN 'email_bound' THEN 1
           WHEN 'plus_done' THEN 2
@@ -119,7 +128,107 @@ export function leaseReusableGptPhoneAccount(db, { workerId = "", runId = "", le
         updated_at ASC,
         id ASC
       LIMIT 1
-    `).get(...REUSABLE_STATUSES);
+    `).get(...REUSABLE_STATUSES, ...normalizedIds);
+    if (!row) {
+      db.exec("COMMIT");
+      return null;
+    }
+    db.prepare(`
+      UPDATE gpt_phone_accounts
+      SET lease_status = 'leased',
+          leased_by = ?,
+          current_run_id = ?,
+          leased_at = ?,
+          lease_expires_at = ${expiresExpr},
+          last_error = '',
+          updated_at = ?
+      WHERE id = ?
+    `).run(workerId, runId, now, now, row.id);
+    const updated = db.prepare("SELECT * FROM gpt_phone_accounts WHERE id = ?").get(row.id);
+    db.exec("COMMIT");
+    return updated;
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+}
+
+export function leaseGptPhoneAccountForRegisterLink(db, { workerId = "", runId = "", leaseMinutes = 120, ids = [] } = {}) {
+  const expiresExpr = leaseExpiresExpr(leaseMinutes);
+  const now = utcNow();
+  const normalizedIds = normalizePositiveIds(ids);
+  const idClause = normalizedIds.length ? `AND g.id IN (${normalizedIds.map(() => "?").join(",")})` : "";
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const row = db.prepare(`
+      SELECT *
+      FROM gpt_phone_accounts g
+      WHERE g.lifecycle_status = 'registered'
+        AND (
+          g.lease_status = 'available'
+          OR g.lease_expires_at = ''
+          OR g.lease_expires_at < CURRENT_TIMESTAMP
+        )
+        ${idClause}
+        AND NOT EXISTS (
+          SELECT 1
+          FROM checkout_links cl
+          WHERE cl.gpt_phone_account_id = g.id
+            AND cl.status IN ('ready', 'paying', 'paid')
+        )
+      ORDER BY g.updated_at ASC, g.id ASC
+      LIMIT 1
+    `).get(...normalizedIds);
+    if (!row) {
+      db.exec("COMMIT");
+      return null;
+    }
+    db.prepare(`
+      UPDATE gpt_phone_accounts
+      SET lease_status = 'leased',
+          leased_by = ?,
+          current_run_id = ?,
+          leased_at = ?,
+          lease_expires_at = ${expiresExpr},
+          last_error = '',
+          updated_at = ?
+      WHERE id = ?
+    `).run(workerId, runId, now, now, row.id);
+    const updated = db.prepare("SELECT * FROM gpt_phone_accounts WHERE id = ?").get(row.id);
+    db.exec("COMMIT");
+    return updated;
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+}
+
+export function leaseGptPhoneAccountForCpaUpload(db, { workerId = "", runId = "", leaseMinutes = 120, ids = [] } = {}) {
+  const expiresExpr = leaseExpiresExpr(leaseMinutes);
+  const now = utcNow();
+  const normalizedIds = normalizePositiveIds(ids);
+  const idClause = normalizedIds.length ? `AND id IN (${normalizedIds.map(() => "?").join(",")})` : "";
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const row = db.prepare(`
+      SELECT *
+      FROM gpt_phone_accounts
+      WHERE lifecycle_status IN ('plus_done', 'email_bound')
+        AND (
+          lease_status = 'available'
+          OR lease_expires_at = ''
+          OR lease_expires_at < CURRENT_TIMESTAMP
+        )
+        ${idClause}
+      ORDER BY CASE lifecycle_status
+          WHEN 'email_bound' THEN 1
+          WHEN 'plus_done' THEN 2
+          ELSE 9
+        END,
+        updated_at ASC,
+        id ASC
+      LIMIT 1
+    `).get(...normalizedIds);
     if (!row) {
       db.exec("COMMIT");
       return null;

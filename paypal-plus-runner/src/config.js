@@ -39,6 +39,7 @@ export const DEFAULT_CONFIG = {
     accountAccessStrategyUi: "session_json",
     sessionJsonTarget: "sub2api",
     plusAccountAccessStrategy: "sub2api_codex_session",
+    paypalPlusProcess: "full",
     signupMethod: "email",
     smsOauthOutputTarget: "cpa_upload",
   },
@@ -266,5 +267,19 @@ export function applyCliOverrides(config, args = {}) {
   if (args.headless === true) result.roxy.headless = true;
   if (args.headed === true) result.roxy.headless = false;
   if (args["no-delete"] === true) result.roxy.deleteWindowsOnExit = false;
+  if (args.mode !== undefined) result.flow.paypalPlusProcess = String(args.mode);
+  if (args["paypal-plus-process"] !== undefined) result.flow.paypalPlusProcess = String(args["paypal-plus-process"]);
+  if (args["checkout-link-ids"] !== undefined) {
+    result.flow.checkoutLinkIds = String(args["checkout-link-ids"] || "")
+      .split(",")
+      .map((value) => Number.parseInt(value.trim(), 10))
+      .filter((value) => Number.isFinite(value) && value > 0);
+  }
+  if (args["gpt-phone-account-ids"] !== undefined) {
+    result.flow.gptPhoneAccountIds = String(args["gpt-phone-account-ids"] || "")
+      .split(",")
+      .map((value) => Number.parseInt(value.trim(), 10))
+      .filter((value) => Number.isFinite(value) && value > 0);
+  }
   return result;
 }

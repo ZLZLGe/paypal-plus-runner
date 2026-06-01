@@ -12,6 +12,7 @@ import { probeLocalJpCheckoutProxy } from "./checkout-conversion/probe-local-jp.
 import { probeRoxy } from "./roxy/probe.js";
 import { stringifySafeJson } from "./utils/safe-output.js";
 import { startUiServer } from "./ui/server.js";
+import { normalizePaypalPlusProcess } from "./plus/process.js";
 
 function commandFromArgv(argv) {
   if (argv[0] && !argv[0].startsWith("--")) {
@@ -23,8 +24,11 @@ function commandFromArgv(argv) {
 async function main() {
   const { command, rest } = commandFromArgv(process.argv.slice(2));
   const args = parseArgs(rest);
-  const config = applyCliOverrides(loadConfig(args.config ? path.resolve(String(args.config)) : ""), args);
+  const configPath = args.config ? path.resolve(String(args.config)) : "";
+  const config = applyCliOverrides(loadConfig(configPath), args);
+  if (configPath) config.__configPath = configPath;
   const dbPath = String(args.db || config.database.path);
+  config.database.path = dbPath;
 
   if (command === "db:init") {
     const db = openDatabase(dbPath);
@@ -89,6 +93,18 @@ async function main() {
   if (command === "start") {
     const result = await runRunner(config, args);
     console.log(stringifySafeJson(result));
+    return;
+  }
+
+  if (command === "plus") {
+    config.flow.paypalPlusProcess = normalizePaypalPlusProcess(args.mode || config.flow?.paypalPlusProcess || "full");
+    config.flow.plusAccountAccessStrategy = "sms_oauth";
+    const result = await runRunner(config, args);
+    console.log(stringifySafeJson({
+      ok: true,
+      mode: config.flow.paypalPlusProcess,
+      ...result,
+    }));
     return;
   }
 

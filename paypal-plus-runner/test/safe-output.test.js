@@ -28,7 +28,7 @@ assert.equal(redacted.email, "user@example.com");
 assert.equal(redacted.result.sessionJson, "[REDACTED]");
 assert.equal(redacted.result.accessToken, "[REDACTED]");
 assert.equal(redacted.result.checkoutSessionId, "[REDACTED]");
-assert.equal(redacted.result.hostedCheckoutUrl, "[REDACTED]");
+assert.equal(redacted.result.hostedCheckoutUrl, "https://pay.openai.com/c/pay/cs_[REDACTED]#fid[REDACTED]");
 assert.equal(redacted.result.nested.raw_session, "[REDACTED]");
 assert.equal(redacted.result.nested.safe, "plain text");
 assert.equal(redacted.result.callbackUrl, "https://chatgpt.com/api/auth/callback/openai?code=[REDACTED]&state=[REDACTED]");

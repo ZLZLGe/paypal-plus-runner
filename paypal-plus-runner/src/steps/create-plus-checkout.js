@@ -27,6 +27,8 @@ export async function createPlusCheckoutStep(context, { accessToken = "", logger
     return { status: "skipped", reason: "already_paid", checkout };
   }
   const target = resolveCheckoutOpenTarget(checkout, context.config);
+  context.checkoutOpenTarget = target;
+  context.checkoutLongUrl = target.url;
   logger?.info?.("opening checkout URL", {
     provider: checkout.provider,
     checkoutSessionId: checkout.checkoutSessionId,
@@ -51,5 +53,5 @@ export async function createPlusCheckoutStep(context, { accessToken = "", logger
       targetPreference: target.preference,
     }),
   });
-  return { status: "done", reason: "checkout_opened", checkout, stage };
+  return { status: "done", reason: "checkout_opened", checkout, target, stage };
 }

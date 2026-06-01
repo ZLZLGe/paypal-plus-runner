@@ -10,6 +10,8 @@ import {
   GPT_PHONE_LIFECYCLE,
   getActiveOpenAiPhoneActivationForAccount,
   gptPhoneAccountToWorkflowAccount,
+  leaseGptPhoneAccountForCpaUpload,
+  leaseGptPhoneAccountForRegisterLink,
   leaseReusableGptPhoneAccount,
   markGptAccountCpaDone,
   markGptAccountEmailBound,
@@ -25,6 +27,8 @@ import { writeFailureArtifacts } from "./utils/artifacts.js";
 import { cancelOpenAiPhoneActivation, finishOpenAiPhoneActivation } from "./providers/openai-phone.js";
 import { openManagedRoxyWindow } from "./roxy/window-pool.js";
 import { RoxyClient, extractRoxyWebSocketUrl } from "./roxy/client.js";
+import { leaseReadyCheckoutLink, markCheckoutLinkFailed } from "./db/checkout-link-store.js";
+import { PAYPAL_PLUS_PROCESS, paypalPlusProcessFromConfig } from "./plus/process.js";
 
 function isRiskError(error) {
   const text = [
@@ -55,6 +59,21 @@ function isMissingReusablePhoneOtpError(error) {
 
 function isSmsOauthFlow(config = {}) {
   return String(config.flow?.plusAccountAccessStrategy || "").trim().toLowerCase() === "sms_oauth";
+}
+
+function checkoutLinkFromRow(row = {}) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    gptPhoneAccountId: row.gpt_phone_account_id,
+    runId: row.run_id,
+    checkoutLongUrl: row.checkout_long_url,
+    status: row.status,
+    lastError: row.last_error,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    paidAt: row.paid_at,
+  };
 }
 
 function startRunHeartbeat(db, runId, {
@@ -307,14 +326,47 @@ export class Worker {
     }
     const runId = makeRunId(this.id);
     const deferOutlookLease = isSmsOauthFlow(this.config);
+    const paypalPlusProcess = paypalPlusProcessFromConfig(this.config);
+    const selectedGptAccountIds = this.config.flow?.gptPhoneAccountIds || [];
     let gptPhoneAccount = null;
+    let checkoutLink = null;
     let account = null;
     if (deferOutlookLease) {
-      gptPhoneAccount = leaseReusableGptPhoneAccount(this.db, {
-        workerId: this.id,
-        runId,
-        leaseMinutes: Number(this.config.runner?.gptAccountLeaseMinutes || 120),
-      });
+      if (paypalPlusProcess === PAYPAL_PLUS_PROCESS.REGISTER_LINK) {
+        gptPhoneAccount = leaseGptPhoneAccountForRegisterLink(this.db, {
+          workerId: this.id,
+          runId,
+          leaseMinutes: Number(this.config.runner?.gptAccountLeaseMinutes || 120),
+          ids: selectedGptAccountIds,
+        });
+        if (!gptPhoneAccount && selectedGptAccountIds.length) return { status: "empty" };
+      } else if (paypalPlusProcess === PAYPAL_PLUS_PROCESS.PAY_LINK) {
+        const leased = leaseReadyCheckoutLink(this.db, {
+          workerId: this.id,
+          runId,
+          ids: this.config.flow?.checkoutLinkIds || [],
+          leaseMinutes: Number(this.config.runner?.gptAccountLeaseMinutes || 120),
+        });
+        if (!leased) return { status: "empty" };
+        gptPhoneAccount = leased.account;
+        checkoutLink = checkoutLinkFromRow(leased.link);
+      } else if (paypalPlusProcess === PAYPAL_PLUS_PROCESS.CPA_UPLOAD) {
+        gptPhoneAccount = leaseGptPhoneAccountForCpaUpload(this.db, {
+          workerId: this.id,
+          runId,
+          leaseMinutes: Number(this.config.runner?.gptAccountLeaseMinutes || 120),
+          ids: selectedGptAccountIds,
+        });
+        if (!gptPhoneAccount) return { status: "empty" };
+      } else {
+        gptPhoneAccount = leaseReusableGptPhoneAccount(this.db, {
+          workerId: this.id,
+          runId,
+          leaseMinutes: Number(this.config.runner?.gptAccountLeaseMinutes || 120),
+          ids: selectedGptAccountIds,
+        });
+        if (!gptPhoneAccount && selectedGptAccountIds.length) return { status: "empty" };
+      }
       account = gptPhoneAccount ? gptPhoneAccountToWorkflowAccount(gptPhoneAccount) : emptyAccount();
       if (gptPhoneAccount) {
         const activation = getActiveOpenAiPhoneActivationForAccount(this.db, gptPhoneAccount.id);
@@ -382,6 +434,8 @@ export class Worker {
         db: this.db,
       });
       context.gptPhoneAccount = gptPhoneAccount;
+      context.checkoutLink = checkoutLink;
+      context.checkoutLongUrl = checkoutLink?.checkoutLongUrl || "";
       context.leasePaypalPhone = () => {
         if (phoneLease) return phoneLease;
         phoneLease = leasePaypalPhone(this.db, {
@@ -460,7 +514,9 @@ export class Worker {
       }
 
       const finalAccount = context.account || account;
-      insertPlusAccount(this.db, finalAccount, result, this.config);
+      if (!deferOutlookLease || paypalPlusProcess !== PAYPAL_PLUS_PROCESS.REGISTER_LINK) {
+        insertPlusAccount(this.db, finalAccount, result, this.config);
+      }
       if (context.gptPhoneAccountId && result.cpaUploadStatus === "done") {
         const updatedGpt = markGptAccountCpaDone(this.db, context.gptPhoneAccountId, {
           boundEmail: result.boundEmail || context.boundEmail || finalAccount.email || "",
@@ -577,6 +633,15 @@ export class Worker {
           success: false,
           disable: isPaypalPhoneRejectedError(error),
           error: error.message,
+        });
+      }
+      if (context?.checkoutLink?.id) {
+        const expired = /expired|not found|invalid.*checkout|checkout.*invalid|checkout.*expired/i
+          .test(String(error.message || ""));
+        markCheckoutLinkFailed(this.db, context.checkoutLink.id, {
+          runId,
+          error: error.message,
+          expired,
         });
       }
       const finalAccount = context?.account || account;

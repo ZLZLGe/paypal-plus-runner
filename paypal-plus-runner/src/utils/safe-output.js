@@ -23,8 +23,8 @@ const SENSITIVE_KEY_NORMALIZED = new Set([
   "text",
 ]);
 
-const SENSITIVE_KEY_PATTERN = /(?:access|id|refresh|session)[_-]?token|session[_-]?json|client[_-]?secret|authorization[_-]?bearer|api[_-]?key|hero[_-]?sms[_-]?api[_-]?key|callback[_-]?json|checkout[_-]?session[_-]?id|checkout[_-]?url|hosted[_-]?checkout[_-]?url|preferred[_-]?checkout[_-]?url|chatgpt[_-]?checkout[_-]?url|publishable[_-]?key/i;
-const URL_WITH_SECRET_KEY_PATTERN = /callback[_-]?url|localhost[_-]?url|redirect[_-]?url/i;
+const SENSITIVE_KEY_PATTERN = /(?:access|id|refresh|session)[_-]?token|session[_-]?json|client[_-]?secret|authorization[_-]?bearer|api[_-]?key|hero[_-]?sms[_-]?api[_-]?key|callback[_-]?json|checkout[_-]?session[_-]?id|checkout.*url|hosted.*url|preferred.*url|chatgpt.*url|publishable[_-]?key/i;
+const URL_WITH_SECRET_KEY_PATTERN = /callback[_-]?url|localhost[_-]?url|redirect[_-]?url|checkout.*url|hosted.*url|preferred.*url|chatgpt.*url/i;
 
 function normalizeKey(key) {
   return String(key || "").replace(/[^a-z0-9]/gi, "").toLowerCase();

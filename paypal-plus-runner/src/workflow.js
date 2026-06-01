@@ -5,6 +5,7 @@ import { fillPasswordStep } from "./steps/fill-password.js";
 import { fetchSignupCodeStep } from "./steps/fetch-signup-code.js";
 import { fillProfileStep } from "./steps/fill-profile.js";
 import { createPlusCheckoutStep } from "./steps/create-plus-checkout.js";
+import { openCheckoutLongLinkStep, saveCheckoutLongLinkStep } from "./steps/checkout-link.js";
 import { fillPlusCheckoutStep } from "./steps/fill-plus-checkout.js";
 import { plusReturnConfirmStep } from "./steps/plus-return-confirm.js";
 import { sessionJsonImportStep } from "./steps/session-json-import.js";
@@ -33,6 +34,8 @@ import {
   markGptAccountEmailBound,
   markGptAccountPlusDone,
 } from "./db/gpt-phone-account-store.js";
+import { markCheckoutLinkFailed, markCheckoutLinkPaid } from "./db/checkout-link-store.js";
+import { PAYPAL_PLUS_PROCESS, paypalPlusProcessFromConfig } from "./plus/process.js";
 
 export const StepStatus = Object.freeze({
   DONE: "done",
@@ -229,6 +232,7 @@ function getSmsOauthSteps(context = {}) {
     return [
       ["login-existing-phone", loginExistingPhoneStep],
       ["plus-checkout-create", createPlusCheckoutStep],
+      ["checkout-link-save", saveCheckoutLongLinkStep],
       ["plus-checkout-billing", fillPlusCheckoutStep],
       ["plus-checkout-return", plusReturnConfirmStep],
       ...cpaSteps,
@@ -241,6 +245,7 @@ function getSmsOauthSteps(context = {}) {
       ["fetch-signup-phone-code", fetchSignupPhoneCodeStep],
       ["fill-profile", fillProfileStep],
       ["plus-checkout-create", createPlusCheckoutStep],
+      ["checkout-link-save", saveCheckoutLongLinkStep],
       ["plus-checkout-billing", fillPlusCheckoutStep],
       ["plus-checkout-return", plusReturnConfirmStep],
       ["fetch-cpa-oauth-url", fetchCpaOAuthUrlStep],
@@ -254,8 +259,55 @@ function getSmsOauthSteps(context = {}) {
     ];
 }
 
+function getRegisterLinkSteps(context = {}) {
+  const lifecycleStatus = resolveLifecycleStatus(context);
+  if (lifecycleStatus === GPT_PHONE_LIFECYCLE.REGISTERED) {
+    return [
+      ["login-existing-phone", loginExistingPhoneStep],
+      ["plus-checkout-create", createPlusCheckoutStep],
+      ["checkout-link-save", saveCheckoutLongLinkStep],
+    ];
+  }
+  return [
+    ["open-chatgpt", openChatgptStep],
+    ["submit-signup-phone", submitSignupPhoneStep],
+    ["fill-password", fillPasswordStep],
+    ["fetch-signup-phone-code", fetchSignupPhoneCodeStep],
+    ["fill-profile", fillProfileStep],
+    ["plus-checkout-create", createPlusCheckoutStep],
+    ["checkout-link-save", saveCheckoutLongLinkStep],
+  ];
+}
+
+function getPayLinkSteps() {
+  return [
+    ["open-checkout-link", openCheckoutLongLinkStep],
+    ["plus-checkout-billing", fillPlusCheckoutStep],
+    ["plus-checkout-return", plusReturnConfirmStep],
+  ];
+}
+
+function getCpaUploadSteps() {
+  return [
+    ["fetch-cpa-oauth-url", fetchCpaOAuthUrlStep],
+    ["oauth-login-phone", oauthLoginPhoneStep],
+    ["fetch-login-phone-code", fetchLoginPhoneCodeStep],
+    ["bind-email", bindEmailStep],
+    ["fetch-bind-email-code", fetchBindEmailCodeStep],
+    ["confirm-oauth-callback", confirmOauthCallbackStep],
+    ["cpa-platform-verify", cpaPlatformVerifyStep],
+    ["callback-json-save", callbackJsonSaveStep],
+  ];
+}
+
 function getWorkflowSteps(context = {}) {
-  if (isSmsOauthFlow(context.config)) return getSmsOauthSteps(context);
+  if (isSmsOauthFlow(context.config)) {
+    const process = paypalPlusProcessFromConfig(context.config);
+    if (process === PAYPAL_PLUS_PROCESS.REGISTER_LINK) return getRegisterLinkSteps(context);
+    if (process === PAYPAL_PLUS_PROCESS.PAY_LINK) return getPayLinkSteps(context);
+    if (process === PAYPAL_PLUS_PROCESS.CPA_UPLOAD) return getCpaUploadSteps(context);
+    return getSmsOauthSteps(context);
+  }
   return [
     ["open-chatgpt", openChatgptStep],
     ["submit-signup-email", submitSignupEmailStep],
@@ -312,6 +364,14 @@ function maybeRecordPhonePlusAccount(context, stepName, result = {}, { logger } 
     });
   }
   context.plusAccountRecorded = true;
+  if (context.checkoutLink?.id && context.db) {
+    const paid = markCheckoutLinkPaid(context.db, context.checkoutLink.id, { runId: context.runId });
+    context.checkoutLink = {
+      ...context.checkoutLink,
+      status: paid?.status || "paid",
+      paidAt: paid?.paid_at || "",
+    };
+  }
   logger?.info?.("phone Plus account recorded", {
     email: row?.email || "",
     accountIdentifierType,
@@ -508,6 +568,15 @@ export async function runWorkflow(context, { dryRun = false, logger, stepsOverri
       }
       error.step = error.step || name;
       if (context.db) {
+        if (context.checkoutLink?.id) {
+          const expired = /expired|not found|invalid.*checkout|checkout.*invalid|checkout.*expired/i
+            .test(String(error.message || ""));
+          markCheckoutLinkFailed(context.db, context.checkoutLink.id, {
+            runId: context.runId,
+            error: error.message,
+            expired,
+          });
+        }
         appendContextEvent(context.db, context, {
           level: "error",
           eventType: "step_failed",
@@ -565,6 +634,8 @@ export async function runWorkflow(context, { dryRun = false, logger, stepsOverri
     boundEmail: context.boundEmail || "",
     gptPhoneAccountId: context.gptPhoneAccountId || null,
     gptPhoneLifecycleStatus: context.gptPhoneLifecycleStatus || "",
+    checkoutLink: context.checkoutLink || null,
+    checkoutLongUrl: context.checkoutLongUrl || "",
     roxyDirId: context.windowInfo?.dirId || "",
     roxyExitIp: context.windowInfo?.exitIp || "",
   };
