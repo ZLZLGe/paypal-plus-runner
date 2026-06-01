@@ -60,4 +60,19 @@ function makeSpawnRecorder() {
   assert.equal(recorder.calls[0].args[recorder.calls[0].args.indexOf("--gpt-phone-account-ids") + 1], "12");
 }
 
+{
+  const recorder = makeSpawnRecorder();
+  const manager = new UiJobManager({
+    config: { database: { path: "/tmp/paypal.db" } },
+    cwd: "/tmp/project",
+    spawnFn: recorder.spawnFn,
+  });
+  const task = manager.start({ mode: "register-link", ids: [12], limit: 1, windows: 1, forceNewPhone: true });
+  assert.equal(task.mode, "register-link");
+  assert.equal(task.forceNewPhone, true);
+  assert.deepEqual(recorder.calls[0].args.includes("--new-phone"), true);
+  assert.deepEqual(recorder.calls[0].args.includes("--gpt-phone-account-ids"), false);
+  assert.deepEqual(recorder.calls[0].args.includes("--checkout-link-ids"), false);
+}
+
 console.log("ui-job-manager tests passed");

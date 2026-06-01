@@ -220,11 +220,13 @@ export function createUiServer(config, { jobManager = null } = {}) {
         if (parsed.pathname === "/api/plus/tasks") {
           if (req.method === "POST") {
             const body = await readJsonBody(req);
+            const forceNewPhone = parseBoolean(body.forceNewPhone);
             const task = tasks.start({
               mode: body.mode || body.process || "full",
-              ids: body.ids || [],
+              ids: forceNewPhone ? [] : body.ids || [],
               limit: body.limit || 1,
               windows: body.windows || 1,
+              forceNewPhone,
             });
             return sendJson(res, { ok: true, task }, 201);
           }

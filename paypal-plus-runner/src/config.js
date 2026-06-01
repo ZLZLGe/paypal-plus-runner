@@ -40,6 +40,7 @@ export const DEFAULT_CONFIG = {
     sessionJsonTarget: "sub2api",
     plusAccountAccessStrategy: "sub2api_codex_session",
     paypalPlusProcess: "full",
+    forceNewGptPhoneAccount: false,
     signupMethod: "email",
     smsOauthOutputTarget: "cpa_upload",
   },
@@ -237,6 +238,15 @@ function isPlainObject(value) {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
+function cliBoolean(value, fallback = false) {
+  if (value === undefined || value === null || value === "") return fallback;
+  if (typeof value === "boolean") return value;
+  const text = String(value).trim().toLowerCase();
+  if (["1", "true", "yes", "y", "on"].includes(text)) return true;
+  if (["0", "false", "no", "n", "off"].includes(text)) return false;
+  return fallback;
+}
+
 export function mergeConfig(base, override) {
   if (!isPlainObject(base)) return structuredClone(override);
   const result = structuredClone(base);
@@ -269,6 +279,8 @@ export function applyCliOverrides(config, args = {}) {
   if (args["no-delete"] === true) result.roxy.deleteWindowsOnExit = false;
   if (args.mode !== undefined) result.flow.paypalPlusProcess = String(args.mode);
   if (args["paypal-plus-process"] !== undefined) result.flow.paypalPlusProcess = String(args["paypal-plus-process"]);
+  if (args["new-phone"] !== undefined) result.flow.forceNewGptPhoneAccount = cliBoolean(args["new-phone"]);
+  if (args["force-new-phone"] !== undefined) result.flow.forceNewGptPhoneAccount = cliBoolean(args["force-new-phone"]);
   if (args["checkout-link-ids"] !== undefined) {
     result.flow.checkoutLinkIds = String(args["checkout-link-ids"] || "")
       .split(",")

@@ -328,18 +328,26 @@ export class Worker {
     const deferOutlookLease = isSmsOauthFlow(this.config);
     const paypalPlusProcess = paypalPlusProcessFromConfig(this.config);
     const selectedGptAccountIds = this.config.flow?.gptPhoneAccountIds || [];
+    const forceNewGptPhoneAccount = this.config.flow?.forceNewGptPhoneAccount === true;
     let gptPhoneAccount = null;
     let checkoutLink = null;
     let account = null;
     if (deferOutlookLease) {
       if (paypalPlusProcess === PAYPAL_PLUS_PROCESS.REGISTER_LINK) {
-        gptPhoneAccount = leaseGptPhoneAccountForRegisterLink(this.db, {
-          workerId: this.id,
-          runId,
-          leaseMinutes: Number(this.config.runner?.gptAccountLeaseMinutes || 120),
-          ids: selectedGptAccountIds,
-        });
-        if (!gptPhoneAccount && selectedGptAccountIds.length) return { status: "empty" };
+        if (forceNewGptPhoneAccount && selectedGptAccountIds.length) {
+          this.logger.warn("ignoring selected gpt phone accounts because --new-phone was requested", {
+            selectedGptAccountIds,
+          });
+        }
+        if (!forceNewGptPhoneAccount) {
+          gptPhoneAccount = leaseGptPhoneAccountForRegisterLink(this.db, {
+            workerId: this.id,
+            runId,
+            leaseMinutes: Number(this.config.runner?.gptAccountLeaseMinutes || 120),
+            ids: selectedGptAccountIds,
+          });
+          if (!gptPhoneAccount && selectedGptAccountIds.length) return { status: "empty" };
+        }
       } else if (paypalPlusProcess === PAYPAL_PLUS_PROCESS.PAY_LINK) {
         const leased = leaseReadyCheckoutLink(this.db, {
           workerId: this.id,

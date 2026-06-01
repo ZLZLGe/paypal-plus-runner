@@ -341,15 +341,18 @@ function selectedIdsForMode(mode) {
   return [];
 }
 
-async function startMode(mode) {
-  starting.value = mode;
+async function startMode(mode, options = {}) {
+  const forceNewPhone = options.forceNewPhone === true;
+  const startKey = forceNewPhone ? `${mode}:new-phone` : mode;
+  starting.value = startKey;
   lastError.value = "";
   try {
     const payload = {
       mode,
-      ids: selectedIdsForMode(mode),
+      ids: forceNewPhone ? [] : selectedIdsForMode(mode),
       limit: Number(limit.value || 1),
       windows: Number(windows.value || 1),
+      forceNewPhone,
     };
     const result = await postJson("/api/plus/tasks", payload);
     selectedTask.value = result.task;
@@ -468,14 +471,27 @@ onUnmounted(() => {
                         <h2>{{ mode.title }}</h2>
                         <p>{{ registerAccounts.length }} 个注册完成但未生成可用链接的账号。</p>
                       </div>
-                      <n-button type="primary" :loading="starting === mode.key" @click="startMode(mode.key)">
-                        <template #icon>
-                          <n-icon><Play /></n-icon>
-                        </template>
-                        {{ mode.action }}
-                      </n-button>
+                      <div class="panel-actions">
+                        <n-button type="primary" :loading="starting === mode.key" @click="startMode(mode.key)">
+                          <template #icon>
+                            <n-icon><Play /></n-icon>
+                          </template>
+                          {{ mode.action }}
+                        </n-button>
+                        <n-button
+                          type="warning"
+                          secondary
+                          :loading="starting === `${mode.key}:new-phone`"
+                          @click="startMode(mode.key, { forceNewPhone: true })"
+                        >
+                          <template #icon>
+                            <n-icon><PhoneCall /></n-icon>
+                          </template>
+                          购买新号并生成长链接
+                        </n-button>
+                      </div>
                     </div>
-                      <n-data-table
+                    <n-data-table
                       v-model:checked-row-keys="selectedRegisterAccountIds"
                       :columns="accountColumns"
                       :data="registerAccounts"
@@ -675,6 +691,7 @@ onUnmounted(() => {
             <n-descriptions label-placement="left" bordered size="small" :column="1">
               <n-descriptions-item label="Task ID">{{ selectedTask.taskId }}</n-descriptions-item>
               <n-descriptions-item label="Mode">{{ selectedTask.mode }}</n-descriptions-item>
+              <n-descriptions-item label="新手机号">{{ selectedTask.forceNewPhone ? "yes" : "no" }}</n-descriptions-item>
               <n-descriptions-item label="Status">{{ selectedTask.status }}</n-descriptions-item>
               <n-descriptions-item label="PID">{{ selectedTask.pid || "-" }}</n-descriptions-item>
               <n-descriptions-item label="Run IDs">{{ (selectedTask.runIds || []).join(", ") || "-" }}</n-descriptions-item>

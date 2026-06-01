@@ -32,7 +32,7 @@ export class UiJobManager {
     this.tasks = new Map();
   }
 
-  start({ mode = "full", limit = 1, windows = 1, ids = [] } = {}) {
+  start({ mode = "full", limit = 1, windows = 1, ids = [], forceNewPhone = false } = {}) {
     const resolvedMode = normalizePaypalPlusProcess(mode);
     const taskId = makeTaskId();
     const args = [CLI_PATH, "plus", "--mode", resolvedMode];
@@ -41,7 +41,10 @@ export class UiJobManager {
     if (this.config.database?.path) args.push("--db", String(this.config.database.path));
     if (Number(limit) > 0) args.push("--limit", String(Math.max(1, Number.parseInt(String(limit), 10) || 1)));
     if (Number(windows) > 0) args.push("--windows", String(Math.max(1, Number.parseInt(String(windows), 10) || 1)));
-    const normalizedIds = (Array.isArray(ids) ? ids : [ids])
+    const shouldForceNewPhone = resolvedMode === PAYPAL_PLUS_PROCESS.REGISTER_LINK && forceNewPhone === true;
+    if (shouldForceNewPhone) args.push("--new-phone");
+    const rawIds = shouldForceNewPhone ? [] : (Array.isArray(ids) ? ids : [ids]);
+    const normalizedIds = rawIds
       .map((value) => Number.parseInt(String(value || ""), 10))
       .filter((value) => Number.isFinite(value) && value > 0);
     if (normalizedIds.length) {
@@ -55,6 +58,7 @@ export class UiJobManager {
     const task = {
       taskId,
       mode: resolvedMode,
+      forceNewPhone: shouldForceNewPhone,
       status: "running",
       pid: 0,
       command: [process.execPath, ...args].join(" "),

@@ -177,6 +177,7 @@ input {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
+  flex-wrap: wrap;
   gap: 16px;
   margin-bottom: 14px;
   padding: 3px 0 12px;
@@ -195,6 +196,14 @@ input {
   color: var(--muted);
   font-size: 12px;
   line-height: 1.45;
+}
+
+.panel-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 .table-actions {
