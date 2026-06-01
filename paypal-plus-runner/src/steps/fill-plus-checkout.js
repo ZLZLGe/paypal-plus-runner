@@ -1224,6 +1224,22 @@ export async function fillPlusCheckoutStep(context, { logger } = {}) {
       });
     }
 
+    if (state.hostedStage === "privacy_settings" || state.hostedPrivacySettingsVisible) {
+      setCheckoutSubstep(context, "paypal-privacy-settings");
+      const dismissResult = await runHostedStep(page, context, { dismissPrivacySettings: true });
+      logger?.info?.("paypal privacy settings dismissed", {
+        clicked: Number(dismissResult?.clicked || 0),
+        clickedButtons: dismissResult?.clickedButtons || [],
+        navigationScheduled: Boolean(dismissResult?.navigationScheduled),
+        returnUrl: dismissResult?.returnUrl || "",
+      });
+      injectedUrl = "";
+      lastSignature = "";
+      lastProgressAt = Date.now();
+      await page.waitForTimeout(dismissResult?.navigationScheduled ? 4500 : 1200);
+      continue;
+    }
+
     if (state.hostedPhoneRejected || state.hostedStage === "phone_rejected") {
       setCheckoutSubstep(context, "paypal-phone-rejected");
       throw buildPaypalPhoneRejectedError(state);

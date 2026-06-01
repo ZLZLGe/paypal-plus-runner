@@ -13,6 +13,7 @@ const PAYPAL_HOSTED_STAGE_APPROVAL = 'approval';
 const PAYPAL_HOSTED_STAGE_GENERIC_ERROR = 'generic_error';
 const PAYPAL_HOSTED_STAGE_PHONE_REJECTED = 'phone_rejected';
 const PAYPAL_HOSTED_STAGE_RISK_BLOCKED = 'risk_blocked';
+const PAYPAL_HOSTED_STAGE_PRIVACY_SETTINGS = 'privacy_settings';
 const PAYPAL_HOSTED_STAGE_UNKNOWN = 'unknown';
 const PAYPAL_HOSTED_HERMES_AUTORUN_SENTINEL = '__MULTIPAGE_PAYPAL_HOSTED_HERMES_AUTORUN__';
 const PAYPAL_HOSTED_GUEST_SUBMIT_SENTINEL = '__MULTIPAGE_PAYPAL_HOSTED_GUEST_SUBMIT__';
@@ -1117,6 +1118,9 @@ function detectPayPalHostedCheckoutStage() {
   if (!/paypal\./i.test(String(location?.host || ''))) {
     return PAYPAL_HOSTED_STAGE_OUTSIDE;
   }
+  if (isHostedPrivacySettingsPage()) {
+    return PAYPAL_HOSTED_STAGE_PRIVACY_SETTINGS;
+  }
   if (isPayPalHostedPhoneRejectedPage()) {
     return PAYPAL_HOSTED_STAGE_PHONE_REJECTED;
   }
@@ -2019,6 +2023,22 @@ async function clickHostedReviewConsent() {
 
 async function runHostedCheckoutStep(payload = {}) {
   await waitForDocumentComplete({ timeoutMs: 5000 });
+  const privacyDismiss = dismissHostedPrivacySettingsPage();
+  if (privacyDismiss) {
+    return {
+      stage: PAYPAL_HOSTED_STAGE_PRIVACY_SETTINGS,
+      ...privacyDismiss,
+    };
+  }
+  if (payload.dismissPrivacySettings === true) {
+    return {
+      stage: detectPayPalHostedCheckoutStage(),
+      submitted: false,
+      privacySettingsVisible: false,
+      clicked: 0,
+      clickedButtons: [],
+    };
+  }
   if (!(isPayPalHostedGuestCheckoutPage() && hasHostedGuestCheckoutCoreFields())) {
     await waitForHostedPageStable({
       label: 'PayPal hosted stage detection',
@@ -2315,8 +2335,9 @@ function inspectPayPalState() {
   const approveButton = findApproveButton();
   const loginPhase = getPayPalLoginPhase(emailInput, passwordInput);
   const hostedStage = detectPayPalHostedCheckoutStage();
+  const hostedPrivacySettingsVisible = hostedStage === PAYPAL_HOSTED_STAGE_PRIVACY_SETTINGS || isHostedPrivacySettingsPage();
   const hostedBusyVisible = hasPayPalHostedBusyIndicator();
-  const hostedBlockingPromptVisible = Boolean(findHostedBlockingPromptButton());
+  const hostedBlockingPromptVisible = hostedPrivacySettingsVisible || Boolean(findHostedBlockingPromptButton());
   const verificationErrorText = getHostedVerificationErrorText();
   const hostedErrorText = hostedStage === PAYPAL_HOSTED_STAGE_GENERIC_ERROR
     ? getPayPalHostedGenericErrorText()
@@ -2336,6 +2357,7 @@ function inspectPayPalState() {
     hasEmailInput: Boolean(emailInput),
     hasPasswordInput: Boolean(passwordInput),
     hasHostedGuestCheckout: hostedStage === PAYPAL_HOSTED_STAGE_GUEST_CHECKOUT,
+    hostedPrivacySettingsVisible,
     hostedBusyVisible,
     hostedBlockingPromptVisible,
     hostedPhoneRejected: hostedStage === PAYPAL_HOSTED_STAGE_PHONE_REJECTED,
@@ -2368,6 +2390,9 @@ if (typeof globalThis !== 'undefined' && globalThis.__PAYPAL_FLOW_TEST_HOOKS__) 
     isHostedVerificationResendControl,
     findHostedVerificationResendButton,
     resendHostedVerificationCode,
+    isHostedPrivacySettingsPage,
+    detectPayPalHostedCheckoutStage,
+    inspectPayPalState,
   });
 }
 

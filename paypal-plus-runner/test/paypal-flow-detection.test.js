@@ -221,4 +221,22 @@ assert.equal(hooks.getHostedVerificationPromptText(), "");
 assert.equal(hooks.hasActiveHostedVerificationDialog(), false);
 assert.equal(hooks.hasHostedVerificationInputs(), false);
 
+const cookieSubmitButton = makeVisibleElement({
+  id: "submitCookiesBtn",
+  text: "Cookieの設定を保存",
+});
+context.location = new URL("https://www.paypal.com/myaccount/privacy/cookiePrefs?locale=ja_JP");
+context.document.title = "PayPal";
+context.document.body.innerText = "Cookieの設定を管理する Cookieの設定を保存";
+context.document.body.textContent = context.document.body.innerText;
+context.document.getElementById = (id) => (id === "submitCookiesBtn" ? cookieSubmitButton : null);
+context.document.querySelector = () => null;
+context.document.querySelectorAll = () => [cookieSubmitButton];
+
+assert.equal(hooks.isHostedPrivacySettingsPage(), true);
+assert.equal(hooks.detectPayPalHostedCheckoutStage(), "privacy_settings");
+const privacyState = hooks.inspectPayPalState();
+assert.equal(privacyState.hostedPrivacySettingsVisible, true);
+assert.equal(privacyState.hostedBlockingPromptVisible, true);
+
 console.log("paypal flow detection tests passed");
