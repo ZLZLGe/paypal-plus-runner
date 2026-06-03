@@ -18,6 +18,20 @@ npm run start -- --config config.example.json --windows 1 --limit 1 --dry-run
 npm run start -- --config config.example.json --windows 3 --limit 6
 ```
 
+## Local UI Startup
+
+本机启动 8787 控制台必须加载真实本地配置，否则 UI 子任务会用默认配置启动，导致 `roxy.token is empty`，任务会在创建 Roxy 窗口前直接失败。
+
+```bash
+node src/cli.js ui --config config.local.json
+```
+
+不要只执行 `npm run ui` 来启动本机控制台；除非显式追加 `-- --config config.local.json`：
+
+```bash
+npm run ui -- --config config.local.json
+```
+
 ## Phone Format
 
 PayPal phones are imported from either format:

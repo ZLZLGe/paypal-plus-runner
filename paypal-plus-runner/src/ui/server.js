@@ -7,6 +7,14 @@ import { initSchema } from "../db/schema.js";
 import { getDatabaseStats } from "../db/stats.js";
 import { listRunEvents } from "../db/run-event-store.js";
 import { listCheckoutLinks } from "../db/checkout-link-store.js";
+import {
+  deletePaypalPhone,
+  disablePaypalPhone,
+  importPaypalPhonesText,
+  listPaypalPhones,
+  restorePaypalPhone,
+  summarizePaypalPhones,
+} from "../db/paypal-phone-store.js";
 import { getUiSettings, saveUiSettings } from "../db/ui-settings-store.js";
 import { redactForCliOutput, redactStringForOutput } from "../utils/safe-output.js";
 import { UiJobManager } from "./job-manager.js";
@@ -132,6 +140,53 @@ function maskCheckoutLink(row = {}) {
   };
 }
 
+function maskSmsUrl(value = "") {
+  const text = String(value || "").trim();
+  if (!text) return "";
+  try {
+    const url = new URL(text);
+    const parts = url.pathname.split("/").filter(Boolean);
+    const maskedParts = parts.map((part, index) => {
+      const decoded = decodeURIComponent(part);
+      const tokenish = decoded.length >= 12 && /[a-z]/i.test(decoded) && /\d/.test(decoded);
+      if (tokenish || index >= 2) return "[REDACTED]";
+      return part;
+    });
+    const pathname = maskedParts.length ? `/${maskedParts.join("/")}` : "";
+    return `${url.origin}${pathname}${url.search ? "?[REDACTED]" : ""}`;
+  } catch {
+    // Keep malformed values useful for diagnosis without returning the full secret-bearing string.
+    return redactStringForOutput(text).slice(0, 80);
+  }
+}
+
+function maskPaypalPhone(row = {}) {
+  return {
+    id: row.id,
+    phone: maskPhoneNumber(row.phone),
+    smsUrlPreview: maskSmsUrl(row.sms_url || row.smsUrl || ""),
+    usedCount: row.used_count ?? row.usedCount ?? 0,
+    maxUse: row.max_use ?? row.maxUse ?? 0,
+    status: row.status || "",
+    leasedBy: row.leased_by || row.leasedBy || "",
+    currentRunId: row.current_run_id || row.currentRunId || "",
+    leasedAt: row.leased_at || row.leasedAt || "",
+    leaseExpiresAt: row.lease_expires_at || row.leaseExpiresAt || "",
+    cooldownUntil: row.cooldown_until || row.cooldownUntil || "",
+    lastError: row.last_error || row.lastError || "",
+    importedAt: row.imported_at || row.importedAt || "",
+    updatedAt: row.updated_at || row.updatedAt || "",
+  };
+}
+
+function defaultPaypalPhoneMaxUse(config = {}) {
+  return Math.max(1, Number.parseInt(String(config.paypalPhone?.maxUse || 5), 10) || 5);
+}
+
+function defaultPaypalPhoneCooldownMinutes(config = {}) {
+  return Math.max(0, Number.parseInt(String(config.paypalPhone?.successCooldownMinutes || 0), 10) || 0);
+}
+
 function queryPlusAccounts(db, { stage = "", limit = 200 } = {}) {
   const normalizedStage = String(stage || "").trim().toLowerCase();
   const clauses = [];
@@ -218,6 +273,57 @@ export function createUiServer(config, { jobManager = null } = {}) {
             }).map(maskCheckoutLink),
           });
         }
+        if (parsed.pathname === "/api/plus/paypal-phones") {
+          const country = String(parsed.searchParams.get("country") || "JP").trim().toUpperCase();
+          if (country !== "JP") throw new Error("only JP PayPal phones are supported from UI");
+          return sendJson(res, {
+            ok: true,
+            country: "JP",
+            maxUse: defaultPaypalPhoneMaxUse(config),
+            paypalPhoneCooldownMinutes: defaultPaypalPhoneCooldownMinutes(config),
+            summary: summarizePaypalPhones(db, { countryCodes: ["JP"] }),
+            phones: listPaypalPhones(db, {
+              countryCodes: ["JP"],
+              limit: parsed.searchParams.get("limit") || 200,
+            }).map(maskPaypalPhone),
+          });
+        }
+        if (parsed.pathname === "/api/plus/paypal-phones/import") {
+          if (req.method !== "POST") return notFound(res);
+          const body = await readJsonBody(req);
+          const text = String(body.text || "").trim();
+          if (!text) throw new Error("paypal phone import text is required");
+          const maxUse = Math.max(1, Number.parseInt(String(body.maxUse || defaultPaypalPhoneMaxUse(config)), 10) || defaultPaypalPhoneMaxUse(config));
+          const result = importPaypalPhonesText(db, text, { maxUse, countryCodes: ["JP"] });
+          return sendJson(res, {
+            ok: true,
+            ...result,
+            country: "JP",
+            maxUse,
+            summary: summarizePaypalPhones(db, { countryCodes: ["JP"] }),
+          }, 201);
+        }
+        const paypalPhoneActionMatch = parsed.pathname.match(/^\/api\/plus\/paypal-phones\/(\d+)\/(disable|restore|delete)$/);
+        if (paypalPhoneActionMatch) {
+          if (req.method !== "POST") return notFound(res);
+          const id = Number.parseInt(paypalPhoneActionMatch[1], 10);
+          const action = paypalPhoneActionMatch[2];
+          const body = await readJsonBody(req);
+          let phone = null;
+          if (action === "disable") {
+            phone = disablePaypalPhone(db, id, { error: body.error || "disabled from ui", countryCodes: ["JP"] });
+          } else if (action === "restore") {
+            phone = restorePaypalPhone(db, id, { countryCodes: ["JP"] });
+          } else {
+            phone = deletePaypalPhone(db, id, { countryCodes: ["JP"] });
+          }
+          return sendJson(res, {
+            ok: true,
+            action,
+            phone: maskPaypalPhone(phone),
+            summary: summarizePaypalPhones(db, { countryCodes: ["JP"] }),
+          });
+        }
         if (parsed.pathname === "/api/plus/settings") {
           if (req.method === "POST") {
             const body = await readJsonBody(req);
@@ -243,6 +349,7 @@ export function createUiServer(config, { jobManager = null } = {}) {
               windows: body.windows || 1,
               forceNewPhone,
               headless: body.headless === undefined ? settings.headless : parseBoolean(body.headless),
+              paypalPhoneCooldownMinutes: body.paypalPhoneCooldownMinutes,
             });
             return sendJson(res, { ok: true, task }, 201);
           }

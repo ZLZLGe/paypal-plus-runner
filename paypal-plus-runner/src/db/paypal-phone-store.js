@@ -84,8 +84,32 @@ export function parsePaypalPhoneLine(line) {
   return { phone, sms_url: smsUrl };
 }
 
-export function importPaypalPhonesFile(db, filePath, { maxUse = 5 } = {}) {
-  const lines = fs.readFileSync(filePath, "utf8").split(/\r?\n/);
+function normalizeAllowedCountries(countryCodes = []) {
+  return normalizePaypalPhoneCountryCodes(countryCodes).filter((country) => ["JP", "US"].includes(country));
+}
+
+function hasActiveLease(db, phoneId) {
+  return Boolean(db.prepare(`
+    SELECT 1 AS active
+    FROM paypal_phone_pool
+    WHERE id = ?
+      AND status = 'leased'
+      AND lease_expires_at <> ''
+      AND lease_expires_at >= CURRENT_TIMESTAMP
+  `).get(phoneId));
+}
+
+function assertAllowedPaypalPhoneCountry(row = {}, countryCodes = []) {
+  const allowedCountries = normalizeAllowedCountries(countryCodes);
+  if (!allowedCountries.length) return;
+  const country = paypalPhoneCountryCode(row.phone || "");
+  if (!allowedCountries.includes(country)) {
+    throw new Error(`paypal phone ${row.id || ""} country ${country || "unknown"} is not allowed`);
+  }
+}
+
+function importPaypalPhoneLines(db, lines = [], { maxUse = 5, countryCodes = [] } = {}) {
+  const allowedCountries = normalizeAllowedCountries(countryCodes);
   const stmt = db.prepare(`
     INSERT INTO paypal_phone_pool(phone, sms_url, max_use, status, imported_at, updated_at)
     VALUES (?, ?, ?, 'active', ?, ?)
@@ -95,7 +119,13 @@ export function importPaypalPhonesFile(db, filePath, { maxUse = 5 } = {}) {
       status = CASE
         WHEN paypal_phone_pool.status IN ('disabled', 'leased') THEN paypal_phone_pool.status
         WHEN paypal_phone_pool.used_count >= excluded.max_use THEN 'exhausted'
+        WHEN paypal_phone_pool.status = 'cooldown' THEN paypal_phone_pool.status
         ELSE 'active'
+      END,
+      cooldown_until = CASE
+        WHEN paypal_phone_pool.status = 'cooldown' AND paypal_phone_pool.used_count < excluded.max_use
+          THEN paypal_phone_pool.cooldown_until
+        ELSE ''
       END,
       updated_at = excluded.updated_at
   `);
@@ -109,6 +139,10 @@ export function importPaypalPhonesFile(db, filePath, { maxUse = 5 } = {}) {
       if (!line) continue;
       try {
         const row = parsePaypalPhoneLine(line);
+        const country = paypalPhoneCountryCode(row.phone);
+        if (allowedCountries.length && !allowedCountries.includes(country)) {
+          throw new Error(`paypal phone country ${country || "unknown"} is not allowed`);
+        }
         stmt.run(row.phone, row.sms_url, Number(maxUse) || 5, utcNow(), utcNow());
         imported += 1;
       } catch (error) {
@@ -124,6 +158,14 @@ export function importPaypalPhonesFile(db, filePath, { maxUse = 5 } = {}) {
   return { imported, skipped, errors };
 }
 
+export function importPaypalPhonesText(db, text, { maxUse = 5, countryCodes = [] } = {}) {
+  return importPaypalPhoneLines(db, String(text || "").split(/\r?\n/), { maxUse, countryCodes });
+}
+
+export function importPaypalPhonesFile(db, filePath, { maxUse = 5, countryCodes = [] } = {}) {
+  return importPaypalPhonesText(db, fs.readFileSync(filePath, "utf8"), { maxUse, countryCodes });
+}
+
 export function leasePaypalPhone(db, { workerId, runId, leaseMinutes = 30, countryCodes = ["JP"] } = {}) {
   const now = utcNow();
   const expiresExpr = `datetime('now', '+${Math.max(1, Number.parseInt(String(leaseMinutes), 10) || 30)} minutes')`;
@@ -135,6 +177,7 @@ export function leasePaypalPhone(db, { workerId, runId, leaseMinutes = 30, count
       WHERE (
           status = 'active'
           OR (status = 'leased' AND lease_expires_at < CURRENT_TIMESTAMP)
+          OR (status = 'cooldown' AND cooldown_until <> '' AND cooldown_until <= CURRENT_TIMESTAMP)
         )
         AND used_count < max_use
         ${countryFilter.clause}
@@ -152,6 +195,7 @@ export function leasePaypalPhone(db, { workerId, runId, leaseMinutes = 30, count
           current_run_id = ?,
           leased_at = ?,
           lease_expires_at = ${expiresExpr},
+          cooldown_until = '',
           updated_at = ?,
           last_error = ''
       WHERE id = ?
@@ -165,22 +209,39 @@ export function leasePaypalPhone(db, { workerId, runId, leaseMinutes = 30, count
   }
 }
 
-export function releasePaypalPhone(db, phoneId, { runId = "", success = false, disable = false, error = "" } = {}) {
+export function releasePaypalPhone(db, phoneId, {
+  runId = "",
+  success = false,
+  disable = false,
+  error = "",
+  cooldownMinutes = 0,
+} = {}) {
+  const normalizedCooldownMinutes = Math.max(0, Number.parseInt(String(cooldownMinutes || 0), 10) || 0);
+  const cooldownExpr = `datetime('now', '+${normalizedCooldownMinutes} minutes')`;
   db.exec("BEGIN IMMEDIATE");
   try {
     if (success) {
       db.prepare(`
         UPDATE paypal_phone_pool
         SET used_count = used_count + 1,
-            status = CASE WHEN used_count + 1 >= max_use THEN 'exhausted' ELSE 'active' END,
+            status = CASE
+              WHEN used_count + 1 >= max_use THEN 'exhausted'
+              WHEN ? > 0 THEN 'cooldown'
+              ELSE 'active'
+            END,
             leased_by = '',
             current_run_id = '',
             leased_at = '',
             lease_expires_at = '',
+            cooldown_until = CASE
+              WHEN used_count + 1 >= max_use THEN ''
+              WHEN ? > 0 THEN ${cooldownExpr}
+              ELSE ''
+            END,
             last_error = '',
             updated_at = ?
         WHERE id = ? AND (? = '' OR current_run_id = ?)
-      `).run(utcNow(), phoneId, runId, runId);
+      `).run(normalizedCooldownMinutes, normalizedCooldownMinutes, utcNow(), phoneId, runId, runId);
     } else if (disable) {
       db.prepare(`
         UPDATE paypal_phone_pool
@@ -189,6 +250,7 @@ export function releasePaypalPhone(db, phoneId, { runId = "", success = false, d
             current_run_id = '',
             leased_at = '',
             lease_expires_at = '',
+            cooldown_until = '',
             last_error = ?,
             updated_at = ?
         WHERE id = ? AND (? = '' OR current_run_id = ?)
@@ -201,6 +263,7 @@ export function releasePaypalPhone(db, phoneId, { runId = "", success = false, d
             current_run_id = '',
             leased_at = '',
             lease_expires_at = '',
+            cooldown_until = '',
             last_error = ?,
             updated_at = ?
         WHERE id = ? AND (? = '' OR current_run_id = ?)
@@ -217,8 +280,125 @@ export function countAvailablePaypalPhones(db, { countryCodes = ["JP"] } = {}) {
   const countryFilter = phoneCountrySql(countryCodes);
   return Number(db.prepare(`
     SELECT COUNT(1) AS c FROM paypal_phone_pool
-    WHERE (status = 'active' OR (status = 'leased' AND lease_expires_at < CURRENT_TIMESTAMP))
+    WHERE (
+        status = 'active'
+        OR (status = 'leased' AND lease_expires_at < CURRENT_TIMESTAMP)
+        OR (status = 'cooldown' AND cooldown_until <> '' AND cooldown_until <= CURRENT_TIMESTAMP)
+      )
       AND used_count < max_use
       ${countryFilter.clause}
   `).get(...countryFilter.params).c || 0);
+}
+
+export function getNextPaypalPhoneCooldown(db, { countryCodes = ["JP"] } = {}) {
+  const countryFilter = phoneCountrySql(countryCodes);
+  const row = db.prepare(`
+    SELECT id, phone, cooldown_until
+    FROM paypal_phone_pool
+    WHERE status = 'cooldown'
+      AND cooldown_until <> ''
+      AND cooldown_until > CURRENT_TIMESTAMP
+      AND used_count < max_use
+      ${countryFilter.clause}
+    ORDER BY cooldown_until ASC, used_count ASC, id ASC
+    LIMIT 1
+  `).get(...countryFilter.params);
+  return row || null;
+}
+
+export function listPaypalPhones(db, { limit = 200, countryCodes = ["JP"] } = {}) {
+  const countryFilter = phoneCountrySql(countryCodes);
+  return db.prepare(`
+    SELECT id, phone, sms_url, used_count, max_use, status, leased_by, current_run_id,
+           leased_at, lease_expires_at, cooldown_until, last_error, imported_at, updated_at
+    FROM paypal_phone_pool
+    WHERE 1 = 1
+      ${countryFilter.clause}
+    ORDER BY
+      CASE status
+        WHEN 'active' THEN 1
+        WHEN 'leased' THEN 2
+        WHEN 'cooldown' THEN 3
+        WHEN 'exhausted' THEN 4
+        WHEN 'disabled' THEN 5
+        ELSE 5
+      END,
+      used_count ASC,
+      id DESC
+    LIMIT ?
+  `).all(...countryFilter.params, Math.max(1, Math.min(500, Number.parseInt(String(limit || 200), 10) || 200)));
+}
+
+export function summarizePaypalPhones(db, { countryCodes = ["JP"] } = {}) {
+  const countryFilter = phoneCountrySql(countryCodes);
+  return db.prepare(`
+    SELECT status, COUNT(1) AS count, SUM(used_count) AS usedCount
+    FROM paypal_phone_pool
+    WHERE 1 = 1
+      ${countryFilter.clause}
+    GROUP BY status
+    ORDER BY status
+  `).all(...countryFilter.params);
+}
+
+export function disablePaypalPhone(db, phoneId, { error = "disabled from ui", countryCodes = [] } = {}) {
+  const id = Number.parseInt(String(phoneId || ""), 10);
+  if (!Number.isFinite(id) || id <= 0) throw new Error("paypal phone id is required");
+  const existing = db.prepare("SELECT * FROM paypal_phone_pool WHERE id = ?").get(id);
+  if (!existing) throw new Error(`paypal phone ${id} not found`);
+  assertAllowedPaypalPhoneCountry(existing, countryCodes);
+  if (hasActiveLease(db, id)) {
+    throw new Error("leased paypal phone cannot be disabled while lease is active");
+  }
+  db.prepare(`
+    UPDATE paypal_phone_pool
+    SET status = 'disabled',
+        leased_by = '',
+        current_run_id = '',
+        leased_at = '',
+        lease_expires_at = '',
+        cooldown_until = '',
+        last_error = ?,
+        updated_at = ?
+    WHERE id = ?
+  `).run(String(error || "disabled from ui").slice(0, 1000), utcNow(), id);
+  return db.prepare("SELECT * FROM paypal_phone_pool WHERE id = ?").get(id);
+}
+
+export function restorePaypalPhone(db, phoneId, { countryCodes = [] } = {}) {
+  const id = Number.parseInt(String(phoneId || ""), 10);
+  if (!Number.isFinite(id) || id <= 0) throw new Error("paypal phone id is required");
+  const existing = db.prepare("SELECT * FROM paypal_phone_pool WHERE id = ?").get(id);
+  if (!existing) throw new Error(`paypal phone ${id} not found`);
+  assertAllowedPaypalPhoneCountry(existing, countryCodes);
+  if (hasActiveLease(db, id)) {
+    throw new Error("leased paypal phone cannot be restored while lease is active");
+  }
+  const status = Number(existing.used_count || 0) >= Number(existing.max_use || 0) ? "exhausted" : "active";
+  db.prepare(`
+    UPDATE paypal_phone_pool
+    SET status = ?,
+        leased_by = '',
+        current_run_id = '',
+        leased_at = '',
+        lease_expires_at = '',
+        cooldown_until = '',
+        last_error = '',
+        updated_at = ?
+    WHERE id = ?
+  `).run(status, utcNow(), id);
+  return db.prepare("SELECT * FROM paypal_phone_pool WHERE id = ?").get(id);
+}
+
+export function deletePaypalPhone(db, phoneId, { countryCodes = [] } = {}) {
+  const id = Number.parseInt(String(phoneId || ""), 10);
+  if (!Number.isFinite(id) || id <= 0) throw new Error("paypal phone id is required");
+  const existing = db.prepare("SELECT * FROM paypal_phone_pool WHERE id = ?").get(id);
+  if (!existing) throw new Error(`paypal phone ${id} not found`);
+  assertAllowedPaypalPhoneCountry(existing, countryCodes);
+  if (hasActiveLease(db, id)) {
+    throw new Error("leased paypal phone cannot be deleted while lease is active");
+  }
+  db.prepare("DELETE FROM paypal_phone_pool WHERE id = ?").run(id);
+  return existing;
 }

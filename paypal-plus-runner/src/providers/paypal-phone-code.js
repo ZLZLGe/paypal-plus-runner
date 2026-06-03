@@ -33,7 +33,8 @@ export function extractPaypalSmsCodesFromResponse(body, { ignoreCodes = [], allo
   const parsed = parseSmsBody(body);
   const codes = [];
   const seen = new Set();
-  for (const candidate of [parsed.payload, body]) {
+  const candidates = parsed.structured ? [parsed.payload] : [parsed.payload, body];
+  for (const candidate of candidates) {
     for (const code of extractSmsCodes(candidate, { allowVariableLength, ignoreCodes })) {
       if (seen.has(code)) continue;
       seen.add(code);
@@ -41,6 +42,36 @@ export function extractPaypalSmsCodesFromResponse(body, { ignoreCodes = [], allo
     }
   }
   return codes;
+}
+
+const JSON_SMS_PAYLOAD_KEYS = new Set([
+  "code",
+  "content",
+  "data",
+  "message",
+  "msg",
+  "raw",
+  "smscode",
+  "smscontent",
+  "smstext",
+  "text",
+]);
+
+function collectJsonSmsPayloads(value, key = "") {
+  if (value === null || value === undefined) return [];
+  const normalizedKey = String(key || "").replace(/[^a-z0-9]/gi, "").toLowerCase();
+  if (typeof value !== "object") {
+    return JSON_SMS_PAYLOAD_KEYS.has(normalizedKey) ? [String(value).trim()].filter(Boolean) : [];
+  }
+  if (Array.isArray(value)) {
+    return value.flatMap((item) => collectJsonSmsPayloads(item));
+  }
+  return Object.entries(value).flatMap(([childKey, childValue]) => {
+    if (JSON_SMS_PAYLOAD_KEYS.has(String(childKey).replace(/[^a-z0-9]/gi, "").toLowerCase()) && typeof childValue !== "object") {
+      return [String(childValue).trim()].filter(Boolean);
+    }
+    return collectJsonSmsPayloads(childValue, childKey);
+  });
 }
 
 async function notifyMaybe(callback, ...args) {
@@ -150,23 +181,11 @@ export function parseSmsBody(body) {
   if (text.startsWith("{") || text.startsWith("[")) {
     try {
       const parsed = JSON.parse(text);
-      const items = Array.isArray(parsed) ? parsed : [parsed];
-      const payloads = items
-        .filter((item) => item && typeof item === "object")
-        .flatMap((item) => [
-          item.SmsCode,
-          item.smsCode,
-          item.code,
-          item.SmsContent,
-          item.smsContent,
-          item.content,
-          item.message,
-        ])
-        .map((value) => String(value || "").trim())
-        .filter(Boolean);
+      const payloads = collectJsonSmsPayloads(parsed);
       if (payloads.length) {
-        return { state: "yes", payload: payloads.join(" ") };
+        return { state: "yes", payload: payloads.join(" "), structured: true };
       }
+      return { state: "no", payload: "", structured: true };
     } catch {
       // Fall through to text formats below.
     }

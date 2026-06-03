@@ -1,7 +1,7 @@
 import { openDatabase } from "./db/connection.js";
 import { initSchema } from "./db/schema.js";
 import { countAvailableOutlook } from "./db/outlook-store.js";
-import { countAvailablePaypalPhones, normalizePaypalPhoneCountryCodes } from "./db/paypal-phone-store.js";
+import { countAvailablePaypalPhones, getNextPaypalPhoneCooldown, normalizePaypalPhoneCountryCodes } from "./db/paypal-phone-store.js";
 import { countReusableGptPhoneAccounts } from "./db/gpt-phone-account-store.js";
 import { Worker } from "./worker.js";
 import { createLogger } from "./logger.js";
@@ -9,6 +9,16 @@ import { createRoxyWindowPool } from "./roxy/window-pool.js";
 
 function isSmsOauthFlow(config = {}) {
   return String(config.flow?.plusAccountAccessStrategy || "").trim().toLowerCase() === "sms_oauth";
+}
+
+export function distributeWorkerLimits(limit = 0, windowCount = 1) {
+  const normalizedLimit = Math.max(0, Number.parseInt(String(limit || 0), 10) || 0);
+  const normalizedWindowCount = Math.max(1, Number.parseInt(String(windowCount || 1), 10) || 1);
+  if (normalizedLimit <= 0) return Array.from({ length: normalizedWindowCount }, () => 0);
+  const activeWindowCount = Math.max(1, Math.min(normalizedWindowCount, normalizedLimit));
+  const base = Math.floor(normalizedLimit / activeWindowCount);
+  const remainder = normalizedLimit % activeWindowCount;
+  return Array.from({ length: activeWindowCount }, (_, index) => base + (index < remainder ? 1 : 0));
 }
 
 export async function runRunner(config, args = {}) {
@@ -22,6 +32,9 @@ export async function runRunner(config, args = {}) {
   const availablePhones = countAvailablePaypalPhones(db, {
     countryCodes: paypalPhoneCountryCodes,
   });
+  const nextPaypalPhoneCooldown = getNextPaypalPhoneCooldown(db, {
+    countryCodes: paypalPhoneCountryCodes,
+  });
   const requestedWindows = Number(args.windows || config.roxy?.windowCount || 5);
   const limit = Number(args.limit || 0);
   const dryRun = Boolean(args["dry-run"] || args.dryRun);
@@ -30,6 +43,7 @@ export async function runRunner(config, args = {}) {
     availableEmails,
     reusableGptPhoneAccounts,
     availablePhones,
+    nextPaypalPhoneCooldownUntil: nextPaypalPhoneCooldown?.cooldown_until || "",
     paypalPhoneCountryCodes,
     requestedWindows,
     limit,
@@ -40,7 +54,7 @@ export async function runRunner(config, args = {}) {
 
   const deferOutlookLease = isSmsOauthFlow(config);
   if (!deferOutlookLease && availableEmails <= 0) return { status: "empty", reason: "no_outlook_emails" };
-  if (!deferOutlookLease && availablePhones <= 0) return { status: "empty", reason: "no_paypal_phones" };
+  if (!deferOutlookLease && availablePhones <= 0 && !nextPaypalPhoneCooldown) return { status: "empty", reason: "no_paypal_phones" };
 
   if (dryRun) {
     const worker = new Worker({
@@ -53,17 +67,18 @@ export async function runRunner(config, args = {}) {
     return { status: "ok", mode: "dry_run", results };
   }
 
-  const effectiveWindows = Math.max(1, Math.min(
+  const availableWindowSlots = Math.max(1, Math.min(
     requestedWindows,
     deferOutlookLease ? requestedWindows : availableEmails,
-    deferOutlookLease ? requestedWindows : availablePhones,
+    deferOutlookLease ? requestedWindows : Math.max(availablePhones, nextPaypalPhoneCooldown ? 1 : 0),
   ));
+  const workerLimits = distributeWorkerLimits(limit, availableWindowSlots);
+  const effectiveWindows = workerLimits.length;
   const pool = await createRoxyWindowPool(config, { count: effectiveWindows, logger });
   const windows = pool.all().map((item) => {
     item.client = pool.client;
     return item;
   });
-  const perWorkerLimit = limit > 0 ? Math.max(1, Math.ceil(limit / windows.length)) : 0;
   const startedAt = Date.now();
   let preserveWindowsForInspection = false;
   try {
@@ -80,7 +95,7 @@ export async function runRunner(config, args = {}) {
         const workerResult = {
           workerId,
           dirId: windowInfo.dirId,
-          results: await worker.runLoop({ limit: perWorkerLimit }),
+          results: await worker.runLoop({ limit: workerLimits[index] ?? 0 }),
         };
         if (workerResult.results.some((item) => item?.preserveBrowserWindow === true)) {
           preserveWindowsForInspection = true;

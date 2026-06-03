@@ -162,6 +162,8 @@ cd /Users/leviviya/Desktop/重构插件/paypal-plus-runner
 npm run ui -- --config config.local.json
 ```
 
+注意：本机启动 `8787` 必须带 `--config config.local.json`。如果只执行 `npm run ui`，UI 子任务会使用默认配置，`roxy.token` 为空，点击 `pay-link/full/register-link` 会在创建 Roxy 窗口前直接失败并报 `roxy.token is empty`。
+
 启动后打开：
 
 ```text

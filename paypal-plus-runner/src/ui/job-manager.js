@@ -15,13 +15,16 @@ function keepRecent(lines = [], chunk = "") {
   return next.slice(-200);
 }
 
-function extractRunIds(lines = []) {
+function extractRunIds(text = "") {
   const ids = new Set();
-  const text = lines.join("\n");
   for (const match of text.matchAll(/"runId"\s*:\s*"([^"]+)"/g)) {
     if (match[1]) ids.add(match[1]);
   }
   return [...ids];
+}
+
+function mergeRunIds(existing = [], chunk = "") {
+  return [...new Set([...existing, ...extractRunIds(String(chunk || ""))])];
 }
 
 export class UiJobManager {
@@ -32,7 +35,15 @@ export class UiJobManager {
     this.tasks = new Map();
   }
 
-  start({ mode = "full", limit = 1, windows = 1, ids = [], forceNewPhone = false, headless = true } = {}) {
+  start({
+    mode = "full",
+    limit = 1,
+    windows = 1,
+    ids = [],
+    forceNewPhone = false,
+    headless = true,
+    paypalPhoneCooldownMinutes = null,
+  } = {}) {
     const resolvedMode = normalizePaypalPlusProcess(mode);
     const taskId = makeTaskId();
     const args = [CLI_PATH, "plus", "--mode", resolvedMode];
@@ -43,6 +54,12 @@ export class UiJobManager {
     args.push(resolvedHeadless ? "--headless" : "--headed");
     if (Number(limit) > 0) args.push("--limit", String(Math.max(1, Number.parseInt(String(limit), 10) || 1)));
     if (Number(windows) > 0) args.push("--windows", String(Math.max(1, Number.parseInt(String(windows), 10) || 1)));
+    if (paypalPhoneCooldownMinutes !== null && paypalPhoneCooldownMinutes !== undefined && paypalPhoneCooldownMinutes !== "") {
+      args.push(
+        "--paypal-phone-cooldown-minutes",
+        String(Math.max(0, Number.parseInt(String(paypalPhoneCooldownMinutes), 10) || 0)),
+      );
+    }
     const shouldForceNewPhone = resolvedMode === PAYPAL_PLUS_PROCESS.REGISTER_LINK && forceNewPhone === true;
     if (shouldForceNewPhone) args.push("--new-phone");
     const rawIds = shouldForceNewPhone ? [] : (Array.isArray(ids) ? ids : [ids]);
@@ -62,6 +79,9 @@ export class UiJobManager {
       mode: resolvedMode,
       forceNewPhone: shouldForceNewPhone,
       headless: resolvedHeadless,
+      paypalPhoneCooldownMinutes: paypalPhoneCooldownMinutes === null || paypalPhoneCooldownMinutes === undefined || paypalPhoneCooldownMinutes === ""
+        ? null
+        : Math.max(0, Number.parseInt(String(paypalPhoneCooldownMinutes), 10) || 0),
       status: "running",
       pid: 0,
       command: [process.execPath, ...args].join(" "),
@@ -82,12 +102,14 @@ export class UiJobManager {
     this.tasks.set(taskId, task);
 
     child.stdout.on("data", (chunk) => {
-      task.output = keepRecent(task.output, chunk.toString("utf8"));
-      task.runIds = extractRunIds(task.output);
+      const text = chunk.toString("utf8");
+      task.output = keepRecent(task.output, text);
+      task.runIds = mergeRunIds(task.runIds, text);
     });
     child.stderr.on("data", (chunk) => {
-      task.output = keepRecent(task.output, chunk.toString("utf8"));
-      task.runIds = extractRunIds(task.output);
+      const text = chunk.toString("utf8");
+      task.output = keepRecent(task.output, text);
+      task.runIds = mergeRunIds(task.runIds, text);
     });
     child.on("error", (error) => {
       task.status = "failed";
@@ -98,7 +120,6 @@ export class UiJobManager {
       task.exitCode = code;
       task.signal = signal || "";
       task.finishedAt = new Date().toISOString();
-      task.runIds = extractRunIds(task.output);
       if (task.status === "stopping") {
         task.status = "stopped";
       } else {

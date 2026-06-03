@@ -8,15 +8,17 @@ import {
 } from "naive-ui";
 import {
   Activity,
+  Ban,
   CreditCard,
-  ExternalLink,
   FileText,
   Layers,
-  ListChecks,
   PhoneCall,
   Play,
   RefreshCw,
+  RotateCcw,
   Square,
+  Trash2,
+  Upload,
   UploadCloud,
 } from "@lucide/vue";
 
@@ -54,6 +56,14 @@ const modes = [
     action: "启动 full",
   },
   {
+    key: "pp-phones",
+    label: "PP 手机号",
+    icon: PhoneCall,
+    title: "日区 PP 手机号",
+    targetLabel: "PayPal 接码池",
+    action: "",
+  },
+  {
     key: "logs",
     label: "运行日志",
     icon: FileText,
@@ -77,7 +87,11 @@ const statusMeta = {
   stopped: { label: "stopped", type: "default", className: "status-expired" },
   registered: { label: "registered", type: "info", className: "status-ready" },
   available: { label: "available", type: "info", className: "status-ready" },
+  active: { label: "active", type: "success", className: "status-paid" },
   leased: { label: "leased", type: "warning", className: "status-running" },
+  cooldown: { label: "cooldown", type: "warning", className: "status-cooldown" },
+  exhausted: { label: "exhausted", type: "default", className: "status-expired" },
+  disabled: { label: "disabled", type: "default", className: "status-expired" },
 };
 
 const activeTab = ref("register-link");
@@ -94,6 +108,7 @@ const selectedCpaAccountIds = ref([]);
 const selectedCheckoutLinkIds = ref([]);
 const limit = ref(1);
 const windows = ref(1);
+const paypalPhoneCooldownMinutes = ref(5);
 const headlessMode = ref(false);
 const settingsLoaded = ref(false);
 let applyingRemoteSettings = false;
@@ -102,6 +117,16 @@ const accounts = ref([]);
 const registerAccounts = ref([]);
 const cpaAccounts = ref([]);
 const checkoutLinks = ref([]);
+const paypalPhones = ref([]);
+const paypalPhoneSummary = ref([]);
+const paypalPhoneMaxUse = ref(5);
+const paypalPhoneMaxUseTouched = ref(false);
+const paypalPhoneCooldownTouched = ref(false);
+const paypalPhoneText = ref("");
+const paypalPhoneImportResult = ref(null);
+const paypalPhoneImporting = ref(false);
+const paypalPhoneActionId = ref("");
+const paypalPhoneFileInput = ref(null);
 const tasks = ref([]);
 const runs = ref([]);
 const activeRuns = ref([]);
@@ -215,6 +240,13 @@ const latestTask = computed(() => tasks.value[0] || null);
 
 const selectedRun = computed(() => runs.value.find((run) => run.runId === selectedRunId.value) || runs.value[0] || null);
 
+const paypalPhoneSummaryText = computed(() => {
+  if (!paypalPhoneSummary.value.length) return "暂无日区 PP 手机号。";
+  return paypalPhoneSummary.value
+    .map((item) => `${item.status}: ${item.count}`)
+    .join(" / ");
+});
+
 const taskRunIds = computed(() => {
   const ids = new Set();
   for (const task of tasks.value) {
@@ -282,6 +314,53 @@ const runColumns = [
   },
 ];
 
+const paypalPhoneColumns = [
+  { title: "ID", key: "id", width: 70 },
+  { title: "手机号", key: "phone", minWidth: 130, render: (row) => renderText(row.phone) },
+  { title: "状态", key: "status", width: 110, render: (row) => renderStatus(row.status) },
+  { title: "使用", key: "usage", width: 92, render: (row) => `${Number(row.usedCount || 0)} / ${Number(row.maxUse || 0)}` },
+  { title: "冷却到", key: "cooldownUntil", width: 140, render: (row) => formatTime(row.cooldownUntil) },
+  { title: "SMS URL", key: "smsUrlPreview", minWidth: 240, ellipsis: { tooltip: true }, render: (row) => renderText(row.smsUrlPreview) },
+  { title: "Run", key: "currentRunId", minWidth: 150, ellipsis: { tooltip: true }, render: (row) => renderText(row.currentRunId) },
+  { title: "更新", key: "updatedAt", width: 140, render: (row) => formatTime(row.updatedAt) },
+  { title: "错误", key: "lastError", minWidth: 180, ellipsis: { tooltip: true }, render: (row) => renderText(row.lastError) },
+  {
+    title: "操作",
+    key: "actions",
+    width: 210,
+    fixed: "right",
+    render: (row) => h("div", { class: "table-actions" }, [
+      h(NButton, {
+        size: "small",
+        secondary: true,
+        disabled: row.status === "disabled" || isPhoneActionLocked(row),
+        loading: paypalPhoneActionId.value === `${row.id}:disable`,
+        onClick: () => managePaypalPhone(row, "disable"),
+      }, { icon: icon(Ban), default: () => "禁用" }),
+      h(NButton, {
+        size: "small",
+        secondary: true,
+        disabled: row.status === "active" || row.status === "leased" || isPhoneActionLocked(row),
+        loading: paypalPhoneActionId.value === `${row.id}:restore`,
+        onClick: () => managePaypalPhone(row, "restore"),
+      }, { icon: icon(RotateCcw), default: () => "恢复" }),
+      h(NButton, {
+        size: "small",
+        secondary: true,
+        type: "error",
+        disabled: isPhoneActionLocked(row),
+        loading: paypalPhoneActionId.value === `${row.id}:delete`,
+        onClick: () => managePaypalPhone(row, "delete"),
+      }, { icon: icon(Trash2), default: () => "删除" }),
+    ]),
+  },
+];
+
+const paypalPhoneImportErrorColumns = [
+  { title: "行", key: "line", width: 70 },
+  { title: "错误", key: "error", minWidth: 260, ellipsis: { tooltip: true } },
+];
+
 async function refreshAll({ silent = false } = {}) {
   if (!silent) loading.value = true;
   lastError.value = "";
@@ -295,6 +374,7 @@ async function refreshAll({ silent = false } = {}) {
       tasksResult,
       runsResult,
       activeRunsResult,
+      paypalPhonesResult,
     ] = await Promise.all([
       getJson("/api/summary"),
       getJson("/api/plus/accounts?limit=300"),
@@ -304,6 +384,7 @@ async function refreshAll({ silent = false } = {}) {
       getJson("/api/plus/tasks"),
       getJson("/api/runs?limit=120"),
       getJson("/api/runs?status=running&activeOnly=1&limit=120"),
+      getJson("/api/plus/paypal-phones?country=JP&limit=300"),
     ]);
     summary.value = summaryResult;
     accounts.value = allAccounts.accounts || [];
@@ -313,6 +394,14 @@ async function refreshAll({ silent = false } = {}) {
     tasks.value = tasksResult.tasks || [];
     runs.value = runsResult.runs || [];
     activeRuns.value = activeRunsResult.runs || [];
+    paypalPhones.value = paypalPhonesResult.phones || [];
+    paypalPhoneSummary.value = paypalPhonesResult.summary || [];
+    if (!paypalPhoneMaxUseTouched.value) {
+      paypalPhoneMaxUse.value = Number(paypalPhonesResult.maxUse || paypalPhoneMaxUse.value || 5);
+    }
+    if (!paypalPhoneCooldownTouched.value) {
+      paypalPhoneCooldownMinutes.value = Number(paypalPhonesResult.paypalPhoneCooldownMinutes ?? paypalPhoneCooldownMinutes.value ?? 5);
+    }
     if (!selectedRunId.value && runs.value[0]) selectedRunId.value = runs.value[0].runId;
     if (selectedRunId.value) await refreshEvents(selectedRunId.value);
     lastUpdated.value = new Date().toISOString();
@@ -351,6 +440,7 @@ async function startMode(mode, options = {}) {
       ids: forceNewPhone ? [] : selectedIdsForMode(mode),
       limit: Number(limit.value || 1),
       windows: Number(windows.value || 1),
+      paypalPhoneCooldownMinutes: Number(paypalPhoneCooldownMinutes.value || 0),
       forceNewPhone,
       headless: headlessMode.value === true,
     };
@@ -375,6 +465,71 @@ async function stopTask(taskId) {
     lastError.value = error.message;
   } finally {
     stoppingTaskId.value = "";
+  }
+}
+
+async function importPaypalPhones() {
+  paypalPhoneImporting.value = true;
+  paypalPhoneImportResult.value = null;
+  lastError.value = "";
+  try {
+    const result = await postJson("/api/plus/paypal-phones/import", {
+      text: paypalPhoneText.value,
+      maxUse: Number(paypalPhoneMaxUse.value || 5),
+    });
+    paypalPhoneImportResult.value = result;
+    await refreshAll({ silent: true });
+  } catch (error) {
+    lastError.value = error.message;
+  } finally {
+    paypalPhoneImporting.value = false;
+  }
+}
+
+async function loadPaypalPhoneFile(event) {
+  const file = event.target?.files?.[0];
+  event.target.value = "";
+  if (!file) return;
+  lastError.value = "";
+  try {
+    paypalPhoneText.value = await file.text();
+  } catch (error) {
+    lastError.value = error.message;
+  }
+}
+
+function openPaypalPhoneFilePicker() {
+  paypalPhoneFileInput.value?.click();
+}
+
+function updatePaypalPhoneMaxUse(value) {
+  paypalPhoneMaxUseTouched.value = true;
+  paypalPhoneMaxUse.value = value;
+}
+
+function updatePaypalPhoneCooldownMinutes(value) {
+  paypalPhoneCooldownTouched.value = true;
+  paypalPhoneCooldownMinutes.value = value;
+}
+
+function isPhoneActionLocked(row = {}) {
+  if (row.status !== "leased" || !row.leaseExpiresAt) return false;
+  const parsed = Date.parse(String(row.leaseExpiresAt).replace(" ", "T").replace(/$/, "Z"));
+  return Number.isFinite(parsed) ? parsed > Date.now() : true;
+}
+
+async function managePaypalPhone(row, action) {
+  const labels = { disable: "禁用", restore: "恢复", delete: "删除" };
+  if (!window.confirm(`确认${labels[action] || action} PP 手机号 ${row.phone}？`)) return;
+  paypalPhoneActionId.value = `${row.id}:${action}`;
+  lastError.value = "";
+  try {
+    await postJson(`/api/plus/paypal-phones/${encodeURIComponent(row.id)}/${action}`, {});
+    await refreshAll({ silent: true });
+  } catch (error) {
+    lastError.value = error.message;
+  } finally {
+    paypalPhoneActionId.value = "";
   }
 }
 
@@ -444,6 +599,17 @@ onUnmounted(() => {
           </n-input-number>
           <n-input-number v-model:value="windows" :min="1" :max="10" size="small">
             <template #prefix>windows</template>
+          </n-input-number>
+          <n-input-number
+            :value="paypalPhoneCooldownMinutes"
+            :min="0"
+            :max="1440"
+            :precision="0"
+            size="small"
+            class="cooldown-input"
+            @update:value="updatePaypalPhoneCooldownMinutes"
+          >
+            <template #prefix>PP冷却分钟</template>
           </n-input-number>
           <div class="toolbar-switch">
             <span>无头模式</span>
@@ -529,7 +695,7 @@ onUnmounted(() => {
                     <div class="panel-head">
                       <div>
                         <h2>{{ mode.title }}</h2>
-                        <p>只消费已保存的 ready 长链接；链接失效时标记 expired/failed，不隐式重新生成。</p>
+                        <p>只消费 ready 长链接；支付尝试失败回到 ready，链接失效才标记 expired/failed。</p>
                       </div>
                       <n-button type="primary" :loading="starting === mode.key" @click="startMode(mode.key)">
                         <template #icon>
@@ -601,6 +767,82 @@ onUnmounted(() => {
                       :row-key="row => row.id"
                       :row-class-name="rowClassName"
                       :scroll-x="1250"
+                      size="small"
+                      :pagination="{ pageSize: 12 }"
+                      striped
+	                    />
+	                  </template>
+
+                  <template v-else-if="mode.key === 'pp-phones'">
+                    <div class="panel-head">
+                      <div>
+                        <h2>{{ mode.title }}</h2>
+                        <p>{{ paypalPhoneSummaryText }}</p>
+                      </div>
+                      <div class="panel-actions">
+                        <n-input-number
+                          :value="paypalPhoneMaxUse"
+                          :min="1"
+                          :max="9999"
+                          :precision="0"
+                          size="small"
+                          @update:value="updatePaypalPhoneMaxUse"
+                        >
+                          <template #prefix>maxUse</template>
+                        </n-input-number>
+                        <input
+                          ref="paypalPhoneFileInput"
+                          class="hidden-file-input"
+                          type="file"
+                          accept=".txt,text/plain"
+                          @change="loadPaypalPhoneFile"
+                        />
+                        <n-button secondary @click="openPaypalPhoneFilePicker">
+                          <template #icon>
+                            <n-icon><Upload /></n-icon>
+                          </template>
+                          选择文件
+                        </n-button>
+                        <n-button type="primary" :loading="paypalPhoneImporting" @click="importPaypalPhones">
+                          <template #icon>
+                            <n-icon><UploadCloud /></n-icon>
+                          </template>
+                          导入
+                        </n-button>
+                      </div>
+                    </div>
+
+                    <section class="pp-phone-import">
+                      <n-input
+                        v-model:value="paypalPhoneText"
+                        type="textarea"
+                        :autosize="{ minRows: 6, maxRows: 12 }"
+                        placeholder="+8190xxxxxxx|https://sms.example/api?key=..."
+                      />
+                      <n-alert
+                        v-if="paypalPhoneImportResult"
+                        :type="paypalPhoneImportResult.skipped ? 'warning' : 'success'"
+                        class="pp-phone-result"
+                      >
+                        导入 {{ paypalPhoneImportResult.imported }} 条，跳过 {{ paypalPhoneImportResult.skipped }} 条。
+                      </n-alert>
+                      <n-data-table
+                        v-if="paypalPhoneImportResult?.errors?.length"
+                        :columns="paypalPhoneImportErrorColumns"
+                        :data="paypalPhoneImportResult.errors"
+                        :row-key="row => row.line"
+                        :scroll-x="360"
+                        size="small"
+                        :pagination="{ pageSize: 6 }"
+                      />
+                    </section>
+
+                    <n-data-table
+                      :columns="paypalPhoneColumns"
+                      :data="paypalPhones"
+                      :row-key="row => row.id"
+                      :row-class-name="rowClassName"
+                      :scroll-x="1420"
                       size="small"
                       :pagination="{ pageSize: 12 }"
                       striped
@@ -687,6 +929,7 @@ onUnmounted(() => {
                   <n-tag round type="info">选中链接 {{ selectedCheckoutLinkIds.length }}</n-tag>
                   <n-tag round>limit {{ limit }}</n-tag>
                   <n-tag round>windows {{ windows }}</n-tag>
+                  <n-tag round>PP冷却 {{ paypalPhoneCooldownMinutes }} 分钟</n-tag>
                   <n-tag round>{{ headlessMode ? "headless" : "headed" }}</n-tag>
                 </n-space>
               </n-card>

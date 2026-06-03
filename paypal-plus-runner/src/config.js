@@ -142,6 +142,7 @@ export const DEFAULT_CONFIG = {
   paypalPhone: {
     leaseMinutes: 30,
     maxUse: 5,
+    successCooldownMinutes: 5,
     countryCodes: ["JP"],
     initialSmsDelayMs: 10000,
     pollIntervalMs: 500,
@@ -281,6 +282,9 @@ export function applyCliOverrides(config, args = {}) {
   if (args["paypal-plus-process"] !== undefined) result.flow.paypalPlusProcess = String(args["paypal-plus-process"]);
   if (args["new-phone"] !== undefined) result.flow.forceNewGptPhoneAccount = cliBoolean(args["new-phone"]);
   if (args["force-new-phone"] !== undefined) result.flow.forceNewGptPhoneAccount = cliBoolean(args["force-new-phone"]);
+  if (args["paypal-phone-cooldown-minutes"] !== undefined) {
+    result.paypalPhone.successCooldownMinutes = Math.max(0, Number.parseInt(String(args["paypal-phone-cooldown-minutes"]), 10) || 0);
+  }
   if (args["checkout-link-ids"] !== undefined) {
     result.flow.checkoutLinkIds = String(args["checkout-link-ids"] || "")
       .split(",")

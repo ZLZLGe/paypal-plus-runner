@@ -31,6 +31,11 @@ export function normalizeCheckoutLongUrl(value = "") {
   return url;
 }
 
+export function isCheckoutLinkExpiredError(error = {}) {
+  return /expired|not found|invalid.*checkout|checkout.*invalid|checkout.*expired/i
+    .test(String(error?.message || error || ""));
+}
+
 export function saveReadyCheckoutLink(db, {
   gptPhoneAccountId,
   runId = "",
@@ -180,8 +185,14 @@ export function markCheckoutLinkFailed(db, id, {
   runId = "",
   error = "",
   expired = false,
+  retryable = false,
 } = {}) {
   const timestamp = now();
+  const nextStatus = expired
+    ? CHECKOUT_LINK_STATUS.EXPIRED
+    : retryable
+      ? CHECKOUT_LINK_STATUS.READY
+      : CHECKOUT_LINK_STATUS.FAILED;
   db.prepare(`
     UPDATE checkout_links
     SET status = ?,
@@ -191,7 +202,7 @@ export function markCheckoutLinkFailed(db, id, {
     WHERE id = ?
       AND status <> 'paid'
   `).run(
-    expired ? CHECKOUT_LINK_STATUS.EXPIRED : CHECKOUT_LINK_STATUS.FAILED,
+    nextStatus,
     String(runId || ""),
     String(runId || ""),
     String(error || "").slice(0, 1000),

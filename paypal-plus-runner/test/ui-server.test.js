@@ -53,6 +53,27 @@ const checkoutLink = saveReadyCheckoutLink(db, {
   runId: "run_register_link",
   checkoutLongUrl: "https://checkout.stripe.com/c/pay/cs_live_ui_server_testAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA#fidsecret",
 });
+db.prepare(`
+  INSERT INTO paypal_phone_pool(phone, sms_url, status, leased_by, current_run_id, lease_expires_at)
+  VALUES (
+    '+818012345678',
+    'https://sms.test/api/sms/leasedSecretToken123',
+    'leased',
+    'worker_guard',
+    'run_guard',
+    datetime('now', '+30 minutes')
+  )
+`).run();
+const leasedPaypalPhone = db.prepare("SELECT id FROM paypal_phone_pool WHERE phone = '+818012345678'").get();
+db.prepare(`
+  INSERT INTO paypal_phone_pool(phone, sms_url, status, cooldown_until)
+  VALUES (
+    '+819099998888',
+    'https://sms.test/api/sms/cooldownSecretToken123',
+    'cooldown',
+    datetime('now', '+5 minutes')
+  )
+`).run();
 
 db.close();
 
@@ -67,6 +88,7 @@ const fakeJobManager = {
       windows: options.windows,
       forceNewPhone: options.forceNewPhone,
       headless: options.headless,
+      paypalPhoneCooldownMinutes: options.paypalPhoneCooldownMinutes,
       status: "running",
       runIds: [],
     };
@@ -87,7 +109,10 @@ const fakeJobManager = {
   },
 };
 
-const server = createUiServer({ database: { path: dbPath } }, { jobManager: fakeJobManager });
+const server = createUiServer({
+  database: { path: dbPath },
+  paypalPhone: { maxUse: 5, successCooldownMinutes: 7 },
+}, { jobManager: fakeJobManager });
 await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
 const address = server.address();
 const baseUrl = `http://127.0.0.1:${address.port}`;
@@ -140,7 +165,14 @@ try {
   const taskResponse = await fetch(`${baseUrl}/api/plus/tasks`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ mode: "pay-link", ids: [checkoutLink.id], limit: 1, windows: 1, headless: false }),
+    body: JSON.stringify({
+      mode: "pay-link",
+      ids: [checkoutLink.id],
+      limit: 1,
+      windows: 1,
+      headless: false,
+      paypalPhoneCooldownMinutes: 7,
+    }),
   });
   assert.equal(taskResponse.status, 201);
   const taskJson = await taskResponse.json();
@@ -149,6 +181,7 @@ try {
   assert.deepEqual(taskJson.task.ids, [checkoutLink.id]);
   assert.equal(taskJson.task.forceNewPhone, false);
   assert.equal(taskJson.task.headless, false);
+  assert.equal(taskJson.task.paypalPhoneCooldownMinutes, 7);
 
   const initialSettingsResponse = await fetch(`${baseUrl}/api/plus/settings`);
   assert.equal(initialSettingsResponse.ok, true);
@@ -168,6 +201,76 @@ try {
   assert.equal(savedSettingsResponse.ok, true);
   const savedSettingsJson = await savedSettingsResponse.json();
   assert.equal(savedSettingsJson.settings.headless, false);
+
+  const importResponse = await fetch(`${baseUrl}/api/plus/paypal-phones/import`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      text: [
+        "7094656315----https://s.eduaieasy.indevs.in/api/sms/fakeToken123456",
+        "+15722337281|https://sms.test/us",
+      ].join("\n"),
+      maxUse: 6,
+    }),
+  });
+  assert.equal(importResponse.status, 201);
+  const importJson = await importResponse.json();
+  assert.equal(importJson.ok, true);
+  assert.equal(importJson.imported, 1);
+  assert.equal(importJson.skipped, 1);
+  assert.equal(importJson.errors[0].line, 2);
+  assert.match(importJson.errors[0].error, /country US is not allowed/);
+
+  const emptyImportResponse = await fetch(`${baseUrl}/api/plus/paypal-phones/import`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text: "" }),
+  });
+  assert.equal(emptyImportResponse.ok, false);
+
+  const phonesResponse = await fetch(`${baseUrl}/api/plus/paypal-phones?country=JP&limit=20`);
+  assert.equal(phonesResponse.ok, true);
+  const phonesJson = await phonesResponse.json();
+  assert.equal(phonesJson.ok, true);
+  assert.equal(phonesJson.country, "JP");
+  assert.equal(phonesJson.maxUse, 5);
+  assert.equal(phonesJson.paypalPhoneCooldownMinutes, 7);
+  assert.equal(JSON.stringify(phonesJson).includes("7094656315"), false);
+  assert.equal(JSON.stringify(phonesJson).includes("fakeToken123456"), false);
+  assert.equal(JSON.stringify(phonesJson).includes("leasedSecretToken123"), false);
+  assert.equal(JSON.stringify(phonesJson).includes("cooldownSecretToken123"), false);
+  const cooldownPaypalPhone = phonesJson.phones.find((phone) => phone.status === "cooldown");
+  assert.ok(cooldownPaypalPhone);
+  assert.ok(cooldownPaypalPhone.cooldownUntil);
+  const importedPaypalPhone = phonesJson.phones.find((phone) => phone.phone.endsWith("6315"));
+  assert.ok(importedPaypalPhone);
+  assert.equal(importedPaypalPhone.maxUse, 6);
+  assert.equal(importedPaypalPhone.smsUrlPreview, "https://s.eduaieasy.indevs.in/api/sms/[REDACTED]");
+
+  const disableResponse = await fetch(`${baseUrl}/api/plus/paypal-phones/${importedPaypalPhone.id}/disable`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ error: "manual test disable" }),
+  });
+  assert.equal(disableResponse.ok, true);
+  const disableJson = await disableResponse.json();
+  assert.equal(disableJson.phone.status, "disabled");
+  assert.equal(disableJson.phone.lastError, "manual test disable");
+
+  const restoreResponse = await fetch(`${baseUrl}/api/plus/paypal-phones/${importedPaypalPhone.id}/restore`, { method: "POST" });
+  assert.equal(restoreResponse.ok, true);
+  const restoreJson = await restoreResponse.json();
+  assert.equal(restoreJson.phone.status, "active");
+
+  const lockedDisableResponse = await fetch(`${baseUrl}/api/plus/paypal-phones/${leasedPaypalPhone.id}/disable`, { method: "POST" });
+  assert.equal(lockedDisableResponse.ok, false);
+  const lockedDisableJson = await lockedDisableResponse.json();
+  assert.match(lockedDisableJson.error, /cannot be disabled while lease is active/);
+
+  const deleteResponse = await fetch(`${baseUrl}/api/plus/paypal-phones/${importedPaypalPhone.id}/delete`, { method: "POST" });
+  assert.equal(deleteResponse.ok, true);
+  const deleteJson = await deleteResponse.json();
+  assert.equal(deleteJson.action, "delete");
 
   const newPhoneTaskResponse = await fetch(`${baseUrl}/api/plus/tasks`, {
     method: "POST",

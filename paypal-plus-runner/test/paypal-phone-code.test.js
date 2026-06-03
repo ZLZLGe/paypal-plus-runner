@@ -38,6 +38,30 @@ assert.equal(
   "782604",
 );
 assert.equal(
+  extractPaypalSmsCodeFromResponse(JSON.stringify({
+    code: 0,
+    number: "7094656315",
+    message: "本次查询暂未收到新的验证码，请稍后再试。",
+  })),
+  "",
+);
+assert.equal(
+  extractPaypalSmsCodeFromResponse(JSON.stringify({
+    code: 654321,
+    number: "7094656315",
+    message: "收到新的验证码。",
+  })),
+  "654321",
+);
+assert.equal(
+  extractPaypalSmsCodeFromResponse(JSON.stringify({
+    code: 0,
+    number: "123456",
+    message: "本次查询暂未收到新的验证码，请稍后再试。",
+  })),
+  "",
+);
+assert.equal(
   extractPaypalSmsCodeFromResponse("yes|old 111111 new 222222", { ignoreCodes: ["111111"] }),
   "222222",
 );

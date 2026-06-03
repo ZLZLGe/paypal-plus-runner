@@ -31,8 +31,9 @@ function makeSpawnRecorder() {
     cwd: "/tmp/project",
     spawnFn: recorder.spawnFn,
   });
-  const task = manager.start({ mode: "pay-link", ids: [7, 8], limit: 2, windows: 1 });
+  const task = manager.start({ mode: "pay-link", ids: [7, 8], limit: 2, windows: 1, paypalPhoneCooldownMinutes: 7 });
   assert.equal(task.mode, "pay-link");
+  assert.equal(task.paypalPhoneCooldownMinutes, 7);
   assert.deepEqual(recorder.calls[0].args.slice(1, 4), ["plus", "--mode", "pay-link"]);
   assert.equal(task.headless, true);
   assert.deepEqual(recorder.calls[0].args.includes("--headless"), true);
@@ -40,6 +41,8 @@ function makeSpawnRecorder() {
   assert.deepEqual(recorder.calls[0].args.includes("--checkout-link-ids"), true);
   assert.deepEqual(recorder.calls[0].args.includes("--gpt-phone-account-ids"), false);
   assert.equal(recorder.calls[0].args[recorder.calls[0].args.indexOf("--checkout-link-ids") + 1], "7,8");
+  assert.deepEqual(recorder.calls[0].args.includes("--paypal-phone-cooldown-minutes"), true);
+  assert.equal(recorder.calls[0].args[recorder.calls[0].args.indexOf("--paypal-phone-cooldown-minutes") + 1], "7");
   assert.equal(recorder.calls[0].options.cwd, "/tmp/project");
 
   recorder.children[0].stdout.emit("data", Buffer.from('{"runId":"run_pay_1"}\n'));
@@ -47,6 +50,24 @@ function makeSpawnRecorder() {
   const done = manager.get(task.taskId);
   assert.equal(done.status, "done");
   assert.deepEqual(done.runIds, ["run_pay_1"]);
+}
+
+{
+  const recorder = makeSpawnRecorder();
+  const manager = new UiJobManager({
+    config: { database: { path: "/tmp/paypal.db" } },
+    cwd: "/tmp/project",
+    spawnFn: recorder.spawnFn,
+  });
+  const task = manager.start({ mode: "register-link", limit: 2, windows: 2 });
+  recorder.children[0].stdout.emit("data", Buffer.from('{"runId":"run_early"}\n'));
+  recorder.children[0].stdout.emit("data", Buffer.from(`${Array.from({ length: 240 }, (_, index) => `line ${index}`).join("\n")}\n`));
+  recorder.children[0].stdout.emit("data", Buffer.from('{"runId":"run_late"}\n'));
+  recorder.children[0].emit("exit", 0, "");
+  const done = manager.get(task.taskId);
+  assert.equal(done.status, "done");
+  assert.deepEqual(done.runIds, ["run_early", "run_late"]);
+  assert.equal(done.output.some((line) => line.includes("run_early")), false);
 }
 
 {

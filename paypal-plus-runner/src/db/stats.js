@@ -22,7 +22,8 @@ export function getDatabaseStats(db) {
 
 export function listPaypalPhones(db, { limit = 50 } = {}) {
   return db.prepare(`
-    SELECT id, phone, used_count, max_use, status, leased_by, current_run_id, lease_expires_at, last_error, updated_at
+    SELECT id, phone, used_count, max_use, status, leased_by, current_run_id,
+           lease_expires_at, cooldown_until, last_error, updated_at
     FROM paypal_phone_pool
     ORDER BY status ASC, used_count ASC, id ASC
     LIMIT ?

@@ -34,7 +34,7 @@ import {
   markGptAccountEmailBound,
   markGptAccountPlusDone,
 } from "./db/gpt-phone-account-store.js";
-import { markCheckoutLinkFailed, markCheckoutLinkPaid } from "./db/checkout-link-store.js";
+import { isCheckoutLinkExpiredError, markCheckoutLinkFailed, markCheckoutLinkPaid } from "./db/checkout-link-store.js";
 import { PAYPAL_PLUS_PROCESS, paypalPlusProcessFromConfig } from "./plus/process.js";
 
 export const StepStatus = Object.freeze({
@@ -195,7 +195,7 @@ async function ensurePaypalPhoneForStep(context, stepName, { logger } = {}) {
   if (typeof context.leasePaypalPhone !== "function") {
     throw new Error("plus checkout billing requires a PayPal phone lease provider");
   }
-  const phoneLease = context.leasePaypalPhone();
+  const phoneLease = await context.leasePaypalPhone();
   if (!phoneLease) {
     throw new Error(`paypal_phone_pool has no available phone for countries: ${(context.config.paypalPhone?.countryCodes || ["JP"]).join(",")}`);
   }
@@ -571,12 +571,12 @@ export async function runWorkflow(context, { dryRun = false, logger, stepsOverri
       error.step = error.step || name;
       if (context.db) {
         if (context.checkoutLink?.id) {
-          const expired = /expired|not found|invalid.*checkout|checkout.*invalid|checkout.*expired/i
-            .test(String(error.message || ""));
+          const expired = isCheckoutLinkExpiredError(error);
           markCheckoutLinkFailed(context.db, context.checkoutLink.id, {
             runId: context.runId,
             error: error.message,
             expired,
+            retryable: error.retryable !== false,
           });
         }
         appendContextEvent(context.db, context, {

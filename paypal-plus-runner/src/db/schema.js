@@ -174,6 +174,7 @@ export function initSchema(db) {
       current_run_id TEXT NOT NULL DEFAULT '',
       leased_at TEXT NOT NULL DEFAULT '',
       lease_expires_at TEXT NOT NULL DEFAULT '',
+      cooldown_until TEXT NOT NULL DEFAULT '',
       last_error TEXT NOT NULL DEFAULT '',
       imported_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -297,6 +298,8 @@ export function initSchema(db) {
   addColumnIfMissing(db, "plus_accounts", "callback_json_path", "TEXT NOT NULL DEFAULT ''");
   addColumnIfMissing(db, "plus_accounts", "gpt_phone_account_id", "INTEGER");
   addColumnIfMissing(db, "plus_accounts", "updated_at", "TEXT NOT NULL DEFAULT ''");
+
+  addColumnIfMissing(db, "paypal_phone_pool", "cooldown_until", "TEXT NOT NULL DEFAULT ''");
 
   addColumnIfMissing(db, "openai_phone_activations", "gpt_phone_account_id", "INTEGER");
   addColumnIfMissing(db, "openai_phone_activations", "leased_by", "TEXT NOT NULL DEFAULT ''");

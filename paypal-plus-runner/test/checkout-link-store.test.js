@@ -105,10 +105,22 @@ test("checkout links can move to failed or expired without recreating payment da
       runId: "run_register",
       checkoutLongUrl: checkoutUrl("three"),
     });
+    const retryable = saveReadyCheckoutLink(db, {
+      gptPhoneAccountId: account.id,
+      runId: "run_register",
+      checkoutLongUrl: checkoutUrl("four"),
+    });
 
     assert.equal(markCheckoutLinkFailed(db, failed.id, { error: "paypal error" }).status, CHECKOUT_LINK_STATUS.FAILED);
     assert.equal(markCheckoutLinkFailed(db, expired.id, { error: "checkout expired", expired: true }).status, CHECKOUT_LINK_STATUS.EXPIRED);
-    assert.equal(listCheckoutLinks(db, { status: "ready" }).length, 0);
+    const retryableAfterFailure = markCheckoutLinkFailed(db, retryable.id, {
+      runId: "run_pay_retryable",
+      error: "paypal phone otp timeout for +817012345678",
+      retryable: true,
+    });
+    assert.equal(retryableAfterFailure.status, CHECKOUT_LINK_STATUS.READY);
+    assert.match(retryableAfterFailure.last_error, /paypal phone otp timeout/);
+    assert.equal(listCheckoutLinks(db, { status: "ready" }).length, 1);
     assert.equal(listCheckoutLinks(db, { status: "failed" }).length, 1);
     assert.equal(listCheckoutLinks(db, { status: "expired" }).length, 1);
   } finally {

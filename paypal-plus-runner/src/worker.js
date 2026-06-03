@@ -2,7 +2,7 @@ import { makeRunId } from "./utils/ids.js";
 import { openDatabase } from "./db/connection.js";
 import { initSchema } from "./db/schema.js";
 import { leaseNextOutlookEmail, markOutlookBound, markOutlookFailure, markOutlookRunning, releaseOutlookEmail } from "./db/outlook-store.js";
-import { leasePaypalPhone, releasePaypalPhone } from "./db/paypal-phone-store.js";
+import { getNextPaypalPhoneCooldown, leasePaypalPhone, releasePaypalPhone } from "./db/paypal-phone-store.js";
 import { createRun, finishRun, updateRun } from "./db/run-history-store.js";
 import { appendRunEvent } from "./db/run-event-store.js";
 import { insertPlusAccount } from "./db/plus-store.js";
@@ -27,8 +27,9 @@ import { writeFailureArtifacts } from "./utils/artifacts.js";
 import { cancelOpenAiPhoneActivation, finishOpenAiPhoneActivation } from "./providers/openai-phone.js";
 import { openManagedRoxyWindow } from "./roxy/window-pool.js";
 import { RoxyClient, extractRoxyWebSocketUrl } from "./roxy/client.js";
-import { leaseReadyCheckoutLink, markCheckoutLinkFailed } from "./db/checkout-link-store.js";
+import { isCheckoutLinkExpiredError, leaseReadyCheckoutLink, markCheckoutLinkFailed } from "./db/checkout-link-store.js";
 import { PAYPAL_PLUS_PROCESS, paypalPlusProcessFromConfig } from "./plus/process.js";
+import { sleep } from "./utils/sleep.js";
 
 function isRiskError(error) {
   const text = [
@@ -74,6 +75,17 @@ function checkoutLinkFromRow(row = {}) {
     updatedAt: row.updated_at,
     paidAt: row.paid_at,
   };
+}
+
+function parseSqliteTimestamp(value = "") {
+  if (!value) return NaN;
+  const text = String(value).trim();
+  if (/[zZ]$|[+-]\d\d:\d\d$/.test(text)) return Date.parse(text);
+  return Date.parse(text.replace(" ", "T").replace(/$/, "Z"));
+}
+
+function paypalPhoneCooldownMinutes(config = {}) {
+  return Math.max(0, Number.parseInt(String(config.paypalPhone?.successCooldownMinutes || 0), 10) || 0);
 }
 
 function startRunHeartbeat(db, runId, {
@@ -316,6 +328,65 @@ export class Worker {
     }
   }
 
+  async leasePaypalPhoneForRun(runId, { context = null } = {}) {
+    while (!this.stopped) {
+      const phoneLease = leasePaypalPhone(this.db, {
+        workerId: this.id,
+        runId,
+        leaseMinutes: Number(this.config.paypalPhone?.leaseMinutes || 30),
+        countryCodes: this.config.paypalPhone?.countryCodes || ["JP"],
+      });
+      if (phoneLease) return phoneLease;
+
+      const nextCooldown = getNextPaypalPhoneCooldown(this.db, {
+        countryCodes: this.config.paypalPhone?.countryCodes || ["JP"],
+      });
+      if (!nextCooldown?.cooldown_until) return null;
+
+      const availableAtMs = parseSqliteTimestamp(nextCooldown.cooldown_until);
+      if (!Number.isFinite(availableAtMs)) return null;
+      const waitMs = Math.max(0, availableAtMs - Date.now());
+      if (waitMs <= 0) continue;
+
+      const waitSeconds = Math.ceil(waitMs / 1000);
+      const message = `waiting ${waitSeconds}s for PayPal phone cooldown`;
+      if (context) context.currentStep = "paypal-phone-cooldown-wait";
+      this.logger.info(message, {
+        runId,
+        paypalPhoneId: nextCooldown.id,
+        cooldownUntil: nextCooldown.cooldown_until,
+      });
+      updateRun(this.db, runId, {
+        status: "running",
+        current_step: "paypal-phone-cooldown-wait",
+      });
+      appendRunEvent(this.db, {
+        runId,
+        workerId: this.id,
+        roxyDirId: this.windowInfo?.dirId || "",
+        accountEmail: context?.account?.email || "",
+        step: "plus-checkout-billing",
+        level: "info",
+        eventType: "paypal-phone-cooldown-wait",
+        message,
+        payload: {
+          paypalPhoneId: nextCooldown.id,
+          cooldownUntil: nextCooldown.cooldown_until,
+          waitMs,
+        },
+      });
+
+      const sleepUntil = Date.now() + waitMs;
+      while (!this.stopped && Date.now() < sleepUntil) {
+        await sleep(Math.min(30000, Math.max(250, sleepUntil - Date.now())));
+      }
+    }
+    const error = new Error("worker stopped during paypal phone cooldown wait");
+    error.retryable = true;
+    error.stopRequested = true;
+    throw error;
+  }
+
   async runOnce() {
     await this.maybeRotateWindowProxy();
     if (this.config.runner?.cleanupBrowserDataBeforeEachAccount !== false && this.windowInfo?.context && this.windowInfo?.page) {
@@ -411,12 +482,7 @@ export class Worker {
     try {
       if (account.id) markOutlookRunning(this.db, account.id);
       if (!deferOutlookLease) {
-        phoneLease = leasePaypalPhone(this.db, {
-          workerId: this.id,
-          runId,
-          leaseMinutes: Number(this.config.paypalPhone?.leaseMinutes || 30),
-          countryCodes: this.config.paypalPhone?.countryCodes || ["JP"],
-        });
+        phoneLease = await this.leasePaypalPhoneForRun(runId);
         if (!phoneLease) {
           throw new Error(`paypal_phone_pool has no available phone for countries: ${(this.config.paypalPhone?.countryCodes || ["JP"]).join(",")}`);
         }
@@ -444,14 +510,9 @@ export class Worker {
       context.gptPhoneAccount = gptPhoneAccount;
       context.checkoutLink = checkoutLink;
       context.checkoutLongUrl = checkoutLink?.checkoutLongUrl || "";
-      context.leasePaypalPhone = () => {
+      context.leasePaypalPhone = async () => {
         if (phoneLease) return phoneLease;
-        phoneLease = leasePaypalPhone(this.db, {
-          workerId: this.id,
-          runId,
-          leaseMinutes: Number(this.config.paypalPhone?.leaseMinutes || 30),
-          countryCodes: this.config.paypalPhone?.countryCodes || ["JP"],
-        });
+        phoneLease = await this.leasePaypalPhoneForRun(runId, { context });
         return phoneLease;
       };
       context.rotateWindowProxy = async (options = {}) => {
@@ -567,7 +628,13 @@ export class Worker {
           signupPhoneNumber: result.signupPhoneNumber || context.signupPhoneNumber || "",
         });
       }
-      if (phoneLease) releasePaypalPhone(this.db, phoneLease.id, { runId, success: true });
+      if (phoneLease) {
+        releasePaypalPhone(this.db, phoneLease.id, {
+          runId,
+          success: true,
+          cooldownMinutes: paypalPhoneCooldownMinutes(this.config),
+        });
+      }
       if (context.gptPhoneAccountId) {
         releaseGptPhoneAccount(this.db, context.gptPhoneAccountId, { runId });
       }
@@ -585,6 +652,20 @@ export class Worker {
         },
       });
       if (this.windowInfo) this.windowInfo.accountRuns += 1;
+      if (paypalPlusProcess === PAYPAL_PLUS_PROCESS.PAY_LINK && phoneLease) {
+        try {
+          await this.maybeRotateWindowProxy({
+            force: true,
+            reason: "paypal_phone_success_cooldown",
+          });
+        } catch (rotateError) {
+          this.logger.warn("roxy proxy rotation after PayPal phone success failed", {
+            runId,
+            dirId: this.windowInfo?.dirId || "",
+            error: rotateError.message,
+          });
+        }
+      }
       return { status: "done", runId, result };
     } catch (error) {
       if (heartbeatTimer) {
@@ -636,20 +717,28 @@ export class Worker {
         this.logger.warn("failure artifact capture failed", { runId, error: artifactError.message });
       }
       if (phoneLease) {
-        releasePaypalPhone(this.db, phoneLease.id, {
-          runId,
-          success: false,
-          disable: isPaypalPhoneRejectedError(error),
-          error: error.message,
-        });
+        if (context?.plusAccountRecorded === true) {
+          releasePaypalPhone(this.db, phoneLease.id, {
+            runId,
+            success: true,
+            cooldownMinutes: paypalPhoneCooldownMinutes(this.config),
+          });
+        } else {
+          releasePaypalPhone(this.db, phoneLease.id, {
+            runId,
+            success: false,
+            disable: isPaypalPhoneRejectedError(error),
+            error: error.message,
+          });
+        }
       }
       if (context?.checkoutLink?.id) {
-        const expired = /expired|not found|invalid.*checkout|checkout.*invalid|checkout.*expired/i
-          .test(String(error.message || ""));
+        const expired = isCheckoutLinkExpiredError(error);
         markCheckoutLinkFailed(this.db, context.checkoutLink.id, {
           runId,
           error: error.message,
           expired,
+          retryable,
         });
       }
       const finalAccount = context?.account || account;

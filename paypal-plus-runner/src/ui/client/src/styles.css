@@ -32,6 +32,10 @@ input {
   font: inherit;
 }
 
+.hidden-file-input {
+  display: none;
+}
+
 .app-shell {
   min-height: 100vh;
   background: var(--bg);
@@ -87,6 +91,10 @@ input {
 
 .toolbar .n-input-number {
   width: 128px;
+}
+
+.toolbar .cooldown-input {
+  width: 164px;
 }
 
 .toolbar-switch {
@@ -223,6 +231,16 @@ input {
   white-space: nowrap;
 }
 
+.pp-phone-import {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.pp-phone-result {
+  margin: 0;
+}
+
 .task-queue-table .task-row {
   cursor: pointer;
 }
@@ -251,6 +269,10 @@ input {
   --status-color: var(--amber);
 }
 
+.status-cooldown {
+  --status-color: var(--amber);
+}
+
 .status-paid,
 .status-cpa {
   --status-color: var(--green);
@@ -272,7 +294,8 @@ input {
 
 .row-paying td,
 .row-running td,
-.row-leased td {
+.row-leased td,
+.row-cooldown td {
   background-color: rgba(178, 106, 0, 0.045);
 }
 
